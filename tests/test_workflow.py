@@ -46,7 +46,7 @@ def _button(app, label):
 
 
 def _page(app, label):
-    next(widget for widget in app.radio if widget.label == "Раздел").set_value(label).run()
+    app.button(key=f"section:{label}").click().run()
     assert not app.exception
 
 
@@ -158,6 +158,7 @@ def test_real_upload_analysis_keeps_originals_after_temporary_files_are_deleted(
     before = (ROOT / "data/control/before/regulation.txt").read_bytes()
     after = (ROOT / "data/control/after/regulation.txt").read_bytes()
     app = AppTest.from_function(_render_app, default_timeout=30).run()
+    next(b for b in app.button if b.label == "Сравнить документы").click().run()
     app.file_uploader(key="before_uploads").set_value([("same.txt", before, "text/plain")]).run()
     app.file_uploader(key="after_uploads").set_value([("same.txt", after, "text/plain")]).run()
     _button(app, "Сравнить").click().run()
@@ -187,6 +188,7 @@ def test_real_upload_analysis_keeps_originals_after_temporary_files_are_deleted(
 
 def test_full_ui_path_from_real_analysis_to_onboarding_without_keys(app_module):
     app = AppTest.from_function(_render_app, default_timeout=30).run()
+    next(b for b in app.button if b.label == "Сравнить документы").click().run()
     _button(app, "Синтетический пример: подключения и кабельные работы").click().run()
     assert not app.exception
     assert app.session_state["error"] is None
@@ -198,6 +200,7 @@ def test_full_ui_path_from_real_analysis_to_onboarding_without_keys(app_module):
     run_id = app.session_state["run_id"]
     cards = impact_cards(result)
     card = next(card for card in cards if card["status"] == "new")
+    _page(app, "Согласование")
     app.multiselect(key=f"{run_id}:impact_selection").set_value([card["id"]]).run()
     assert app.button(key=f"{run_id}:freeze").disabled
     person_line = f"Вымышленный новичок | {card['unit']}"
@@ -227,13 +230,13 @@ def test_full_ui_path_from_real_analysis_to_onboarding_without_keys(app_module):
 
     _page(app, "Ознакомление")
     app.button(key=f"ack:publish:{version_id}").click().run()
-    app.radio(key=f"ack:mode:{version_id}").set_value("Сотрудник (симуляция)").run()
+    app.radio(key="active_page").set_value("Мои документы").run()
     assert not app.exception
-    app.button(key=f"ack:reader:{version_id}:{person_id}:0:ack").click().run()
+    app.button(key=f"my-documents:{version_id}:{person_id}:0:ack").click().run()
     assert not app.exception
     assert acknowledgement_summary(app.session_state["workspace"], version_id)[0]["acknowledged_at"]
 
-    _page(app, "Документы новичка")
+    app.radio(key="active_page").set_value("Мои сравнения").run()
     app.multiselect(key=f"onboarding:versions:{person_id}:{card['unit']}").set_value([version_id]).run()
     app.button(key="onboarding:assign").click().run()
     app.radio(key="onboarding:mode").set_value("Новичок (симуляция)").run()
@@ -243,5 +246,13 @@ def test_full_ui_path_from_real_analysis_to_onboarding_without_keys(app_module):
     assert progress["percent"] == 100
     assert app.session_state["workspace"]["versions"][version_id] == snapshot
 
-    _page(app, "Анализ изменений")
+    _page(app, "Результат")
     assert app.session_state["workspace"]["versions"][version_id] == snapshot
+
+
+def test_identical_versions_are_scoped_to_their_comparison():
+    workspace = new_workspace()
+    first = make_version(workspace, **_snapshot_args(), comparison_id="first")
+    second = make_version(workspace, **_snapshot_args(), comparison_id="second")
+    assert first != second
+    assert make_version(workspace, **_snapshot_args(), comparison_id="first") == first

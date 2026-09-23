@@ -495,3 +495,30 @@ def render_onboarding(workspace):
     with st.expander("История назначения пакета"):
         for entry in package["history"]:
             st.text(f"{entry['assigned_at']} · {entry['recipient']['role']} · версии: {', '.join(entry['version_ids'])}")
+
+
+def render_my_documents(workspace):
+    """Employee inbox restricted to published versions assigned to the chosen person."""
+    import streamlit as st
+
+    st.caption("Прочитайте назначенные документы, задайте вопрос и отметьте ознакомление.")
+    st.caption("Прототип: выбор сотрудника — симуляция, без проверки личности и ЭЦП.")
+    versions = {vid: workspace["versions"][vid] for vid in workspace.get("acknowledgements", {})}
+    people = {p["id"]: p for version in versions.values() for p in version["recipients"]}
+    if not people:
+        st.info("Пока нет назначенных документов. Они появятся после согласования и назначения ознакомления.")
+        return
+    person_id = st.selectbox("Сотрудник", list(people), key="my-documents:person",
+                             format_func=lambda pid: f"{people[pid]['name']} · {people[pid]['role']}")
+    package = workspace.get("onboarding", {}).get(person_id)
+    if package:
+        progress = onboarding_progress(workspace, person_id)
+        st.progress(progress["percent"] / 100,
+                    text=f"Пакет новичка: {progress['acknowledged']} из {progress['total']} документов")
+    for version_id, version in versions.items():
+        if person_id not in {p["id"] for p in version["recipients"]}:
+            continue
+        st.subheader(f"{version['title']} · ред. {version['revision']}", anchor=False)
+        _render_changes(version, person_id)
+        for index in range(len(version["documents"])):
+            _render_document(workspace, version_id, person_id, index, "my-documents")

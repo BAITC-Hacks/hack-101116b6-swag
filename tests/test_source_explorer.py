@@ -63,6 +63,7 @@ def test_real_demo_exposes_sources_without_api(monkeypatch):
 
     monkeypatch.setattr(config, 'get_llm', no_api)
     app = AppTest.from_file(Path(__file__).resolve().parents[1] / 'app/main.py', default_timeout=30).run()
+    next(b for b in app.button if b.label == "Сравнить документы").click().run()
     next(b for b in app.button if b.label == 'Демо на тестовом комплекте').click().run()
     assert not app.exception
     assert any(tab.label == 'Структура и пункты' for tab in app.tabs)

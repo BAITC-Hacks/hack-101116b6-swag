@@ -30,6 +30,7 @@ def test_chart_switching_motion_and_decisions_never_repeat_analysis(monkeypatch)
 
     monkeypatch.setattr(module, "run_analysis", analyzer)
     app = AppTest.from_function(render_app, default_timeout=20).run()
+    next(b for b in app.button if b.label == "Сравнить документы").click().run()
     next(b for b in app.button if b.label == "Демо на тестовом комплекте").click().run()
     assert not app.exception
     run_id = app.session_state["run_id"]
@@ -60,6 +61,8 @@ def test_chart_switching_motion_and_decisions_never_repeat_analysis(monkeypatch)
     assert {item["name"]: item["value"] for item in chart["series"][0]["data"]} == {
         "Подтверждено": 1, "Ожидает решения": 3,
     }
+    next(b for b in app.button if b.label == "Мои сравнения").click().run()
+    next(b for b in app.button if b.label == "Сравнить документы").click().run()
     next(b for b in app.button if b.label == "Демо на тестовом комплекте").click().run()
     assert not app.exception
     assert calls == [1, 1]
@@ -78,6 +81,7 @@ def test_progress_reflects_log_events_and_does_not_fake_success(monkeypatch):
 
     monkeypatch.setattr(module, "run_analysis", failing_analyzer)
     app = AppTest.from_function(render_app, default_timeout=20).run()
+    next(b for b in app.button if b.label == "Сравнить документы").click().run()
     next(b for b in app.button if b.label == "Демо на тестовом комплекте").click().run()
     assert not app.exception
     assert app.session_state["result"] is None
@@ -98,6 +102,7 @@ def test_upload_feedback_tracks_replacement_without_starting_analysis(monkeypatc
 
     monkeypatch.setattr(module, "run_analysis", analyzer)
     app = AppTest.from_function(render_app, default_timeout=20).run()
+    next(b for b in app.button if b.label == "Сравнить документы").click().run()
     for side in ("before", "after"):
         app.file_uploader(key=f"{side}_uploads").set_value([
             (f"{side}.txt", b"1.1. Department responsibilities.", "text/plain")
@@ -107,9 +112,12 @@ def test_upload_feedback_tracks_replacement_without_starting_analysis(monkeypatc
     assert sum("получены, ещё не проанализированы" in item.value for item in app.caption) == 2
     next(b for b in app.button if b.label == "Сравнить").click().run()
     assert not app.exception
-    assert next(s for s in app.status if s.label == "Сравнение завершено · результат ниже").state == "complete"
-    assert app.get("progress")[0].proto.value == 100
+    assert app.session_state["comparison_view"] == "detail"
+    assert app.session_state["result"] is not None
+    assert not app.file_uploader
     assert calls == [1]
+    next(b for b in app.button if b.label == "Мои сравнения").click().run()
+    next(b for b in app.button if b.label == "Сравнить документы").click().run()
     app.file_uploader(key="after_uploads").set_value([
         ("after.txt", b"1.1. Changed department responsibilities.", "text/plain")
     ]).run()

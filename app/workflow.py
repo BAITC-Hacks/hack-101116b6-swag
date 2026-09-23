@@ -19,7 +19,7 @@ def new_workspace():
     return {"versions": {}, "approvals": {}, "acknowledgements": {}, "onboarding": {}}
 
 
-def make_version(workspace, *, title, revision, reviewed_by, documents, changes, recipients, reference_documents=None):
+def make_version(workspace, *, title, revision, reviewed_by, documents, changes, recipients, reference_documents=None, comparison_id=None):
     if not title.strip() or not revision.strip() or not reviewed_by.strip():
         raise ValueError("Укажите название, редакцию и ответственного.")
     if not documents or not recipients or not changes:
@@ -49,6 +49,8 @@ def make_version(workspace, *, title, revision, reviewed_by, documents, changes,
     payload = deepcopy({"title": title.strip(), "revision": revision.strip(), "reviewed_by": reviewed_by.strip(),
                         "documents": documents, "reference_documents": reference_documents or [],
                         "changes": changes, "recipients": recipients})
+    if comparison_id is not None:
+        payload["comparison_id"] = comparison_id
     signature = deepcopy(payload)
     for doc in signature["documents"] + signature["reference_documents"]:
         doc["content"] = hashlib.sha256(doc["content"]).hexdigest()

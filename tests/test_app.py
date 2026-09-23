@@ -61,6 +61,7 @@ def app_runtime(app_module, monkeypatch):
 
     monkeypatch.setattr(app_module, "run_analysis", tracked_run)
     app = AppTest.from_function(_render_app, default_timeout=30).run()
+    next(b for b in app.button if b.label == "Сравнить документы").click().run()
     assert not app.exception
     return app, calls
 
@@ -83,6 +84,9 @@ def _visible_text(app):
 
 
 def _start_demo(app):
+    if not any(b.label == "Демо на тестовом комплекте" for b in app.button):
+        _button(app, "Мои сравнения").click().run()
+        _button(app, "Сравнить документы").click().run()
     _button(app, "Демо на тестовом комплекте").click().run()
     assert not app.exception
     assert app.session_state["result"]
@@ -264,8 +268,8 @@ def test_sidebar_round_trip_preserves_result_decisions_and_documents(app_runtime
         for key in ("result", "decisions", "journal", "run_id", "source_documents", "input_signature", "chat_history")
     }
 
-    for page in ("ИИ-чат", "Согласование", "Ознакомление", "Документы новичка", "Анализ изменений"):
-        next(widget for widget in app.radio if widget.label == "Раздел").set_value(page).run()
+    for page in ("Вопросы", "Согласование", "Результат"):
+        app.button(key=f"section:{page}").click().run()
         assert not app.exception
         for key, value in state.items():
             assert app.session_state[key] == value, f"Navigation to {page} reset {key}"
@@ -276,6 +280,8 @@ def test_sidebar_round_trip_preserves_result_decisions_and_documents(app_runtime
     if source == "uploads":
         # Hidden upload widgets may reset, but returning must not erase the
         # completed analysis. The next intentional change starts a fresh input.
+        _button(app, "Мои сравнения").click().run()
+        _button(app, "Сравнить документы").click().run()
         app.file_uploader(key="before_uploads").set_value([
             ("new-before.txt", b"1.1. Replacement regulation.", "text/plain")
         ]).run()
@@ -318,6 +324,7 @@ def test_pagination_preserves_decisions_and_bounds_pages_after_filtering(app_mod
 
     monkeypatch.setattr(app_module, "run_analysis", many_results)
     app = AppTest.from_function(_render_app, default_timeout=30).run()
+    next(b for b in app.button if b.label == "Сравнить документы").click().run()
     _start_demo(app)
     run_id = app.session_state["run_id"]
     snapshot = deepcopy(app.session_state["result"])
@@ -386,6 +393,7 @@ def test_changed_upload_content_hides_old_result_and_compare_uses_live_files(app
 
     monkeypatch.setattr(app_module, "run_analysis", tracked_run)
     app = AppTest.from_function(_render_app, default_timeout=30).run()
+    next(b for b in app.button if b.label == "Сравнить документы").click().run()
     assert not app.exception
     assert all(uploader.accept_multiple_files for uploader in app.file_uploader)
     assert all(set(uploader.allowed_type) == {".pdf", ".docx", ".xlsx", ".txt"} for uploader in app.file_uploader)
@@ -405,6 +413,8 @@ def test_changed_upload_content_hides_old_result_and_compare_uses_live_files(app
     run_id = app.session_state["run_id"]
     finding_id = app.session_state["result"]["findings"][0]["id"]
     app.button(key=f"{run_id}:{finding_id}:confirm").click().run()
+    _button(app, "Мои сравнения").click().run()
+    _button(app, "Сравнить документы").click().run()
     app.file_uploader(key="before_uploads").set_value([
         ("before.txt", b"version two", "text/plain")
     ]).run()
@@ -428,6 +438,8 @@ def test_failure_clears_previous_result_and_redacts_exception(app_module, app_ru
         raise RuntimeError(sensitive_marker)
 
     monkeypatch.setattr(app_module, "run_analysis", broken_run)
+    _button(app, "Мои сравнения").click().run()
+    _button(app, "Сравнить документы").click().run()
     _button(app, "Демо на тестовом комплекте").click().run()
     assert not app.exception
     assert app.error
@@ -453,6 +465,7 @@ def test_empty_results_missing_sources_and_unknown_statuses_render(app_module, m
         result["findings"][0]["severity"] = "unrecognized"
     monkeypatch.setattr(app_module, "run_analysis", lambda *args, **kwargs: result)
     app = AppTest.from_function(_render_app, default_timeout=30).run()
+    next(b for b in app.button if b.label == "Сравнить документы").click().run()
     _start_demo(app)
     assert len(app.tabs) == 6
     assert not app.exception

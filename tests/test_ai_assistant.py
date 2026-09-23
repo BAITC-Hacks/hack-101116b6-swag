@@ -117,8 +117,9 @@ def test_no_key_chat_returns_local_sources_without_api(monkeypatch):
 def test_chat_page_works_after_real_offline_analysis(monkeypatch):
     monkeypatch.setenv("DEMO_MODE", "true")
     app = AppTest.from_file(str(ROOT / "app" / "main.py"), default_timeout=30).run()
+    next(b for b in app.button if b.label == "Сравнить документы").click().run()
     next(button for button in app.button if button.label == "Синтетический пример: подключения и кабельные работы").click().run()
-    next(widget for widget in app.radio if widget.label == "Раздел").set_value("ИИ-чат").run()
+    app.button(key="section:Вопросы").click().run()
     assert not app.exception
     app.chat_input[0].set_value("Кто проверяет работы?").run()
     assert not app.exception
@@ -141,13 +142,14 @@ def test_openai_mode_renders_candidates_and_chat_without_network(monkeypatch):
 
     monkeypatch.setattr(ai_assistant, "_call_json", fake_response)
     app = AppTest.from_file(str(ROOT / "app" / "main.py"), default_timeout=30).run()
+    next(b for b in app.button if b.label == "Сравнить документы").click().run()
     assert app.toggle[0].value is True
     next(button for button in app.button if button.label == "Синтетический пример: подключения и кабельные работы").click().run()
     assert not app.exception
     assert app.session_state["result"]["ai_insights"]
     assert all(e["doc"].startswith(("До/", "После/"))
                for item in app.session_state["result"]["ai_insights"] for e in item["evidence"])
-    next(widget for widget in app.radio if widget.label == "Раздел").set_value("ИИ-чат").run()
+    app.button(key="section:Вопросы").click().run()
     app.chat_input[0].set_value("Какие обязанности изменились?").run()
     assert not app.exception
     assert app.session_state["chat_history"][-1]["mode"] == "openai"

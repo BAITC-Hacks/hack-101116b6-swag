@@ -4,6 +4,7 @@ import hashlib
 import math
 import sys
 from contextlib import contextmanager
+from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -19,7 +20,7 @@ from src import config  # noqa: E402
 from src.agent import run as agent_run  # noqa: E402
 from src.parse import read_text  # noqa: E402
 from app.workflow import DEMO_PEOPLE, impact_cards, make_version, new_workspace  # noqa: E402
-from app.approvals import render_approvals  # noqa: E402
+from app.approvals import render_approvals, approval_status  # noqa: E402
 from app.acknowledgements import render_acknowledgements, render_onboarding  # noqa: E402
 from app.ai_assistant import answer_question, enrich_analysis  # noqa: E402
 from app.source_explorer import render_sources  # noqa: E402
@@ -203,7 +204,7 @@ def sample_paths():
 
 def clear_run():
     st.session_state.update(result=None, journal=[], run_id=None, decisions={}, error=None,
-                            source_documents=None, chat_history=[])
+                            source_documents=None, chat_history=[], active_version=None)
 
 
 def uploads_changed():
@@ -213,10 +214,6 @@ def uploads_changed():
         st.session_state.get("before_uploads") or [],
         st.session_state.get("after_uploads") or [],
     )
-
-
-def navigate(page):
-    st.session_state.active_page = page
 
 
 def paginate_items(items, *, key, page_size=8):
@@ -284,6 +281,8 @@ def start_run(before, after, *, uploaded=False, on_event=None):
         else:
             result = analyze(before, after, [p.name for p in before], [p.name for p in after])
         st.session_state.result = result
+        save_comparison()
+        st.session_state.comparison_view = "detail"
     except Exception:
         # Exception text may contain document contents, paths or credentials.
         st.session_state.error = "Не удалось проанализировать комплект. Проверьте формат, наличие текста и общий размер файлов (до 50 МБ)."
@@ -567,42 +566,18 @@ def render_impact(result):
             version_id = make_version(st.session_state.workspace, title=title, revision=revision, reviewed_by=reviewer,
                                       documents=st.session_state.source_documents["after"],
                                       reference_documents=st.session_state.source_documents["before"],
-                                      changes=selected_cards, recipients=[p for p in recipients if p["id"] in assigned])
+                                      changes=selected_cards, recipients=[p for p in recipients if p["id"] in assigned],
+                                      comparison_id=run_id)
             st.session_state.active_version = version_id
-            st.success(f"Версия {revision} · {version_id[:12]} сохранена в этой сессии. Откройте «Согласование» слева.")
+            save_comparison()
+            st.session_state.comparison_section = "Согласование"
+            st.rerun()
         except ValueError as error:
             st.error(str(error))
 
 
-def render_workflow_page(page):
-    workspace = st.session_state.workspace
-    if page == "Документы новичка":
-        render_onboarding(workspace)
-        return
-    versions = workspace["versions"]
-    if not versions:
-        with st.container(border=True):
-            st.subheader("Пока нет версий для работы", anchor=False)
-            st.info("Сначала выполните анализ, проверьте изменения и создайте версию для согласования.")
-            st.button("Перейти к анализу", icon=":material/compare_arrows:", type="primary",
-                      on_click=navigate, args=("Анализ изменений",), key=f"empty:{page}:analysis")
-        return
-    choices = list(versions)
-    active = st.session_state.get("active_version", choices[-1])
-    version_id = st.selectbox("Версия документа", choices, index=choices.index(active) if active in choices else 0,
-                             format_func=lambda vid: f"{versions[vid]['title']} · ред. {versions[vid]['revision']} · {vid[:12]}",
-                             key=f"workflow:{page}:version")
-    with st.expander("Исходные документы «до»"):
-        for index, doc in enumerate(versions[version_id].get("reference_documents", [])):
-            st.download_button(doc["name"], doc["content"], file_name=doc["name"].split("/")[-1], key=f"ref:{page}:{version_id}:{index}")
-    if page == "Согласование":
-        render_approvals(workspace, version_id)
-    else:
-        render_acknowledgements(workspace, version_id)
-
-
 def render_chat_page():
-    st.header("ИИ-чат по изменениям")
+    st.header("Вопросы по сравнению", anchor=False)
     if st.session_state.get("result") is None or not st.session_state.get("source_documents"):
         st.info("Сначала сравните документы в разделе «Анализ изменений».")
         return
@@ -633,15 +608,10 @@ def render_sidebar():
     with st.sidebar:
         st.markdown("### :material/account_tree: Оргструктура")
         st.caption("Документы и изменения")
-        page = st.radio(
-            "Раздел", ["Анализ изменений", "ИИ-чат", "Согласование", "Ознакомление", "Документы новичка"],
-            key="active_page", label_visibility="collapsed",
-        )
+        page = st.radio("Раздел", ["Мои сравнения", "Мои документы"],
+                        key="active_page", label_visibility="collapsed")
         st.divider()
-        st.markdown("**Как проходит работа**")
-        st.caption("1. Сравните документы\n\n2. Проверьте и согласуйте изменения\n\n3. Передайте документы на ознакомление")
-        versions = len(st.session_state.workspace["versions"])
-        st.caption(f"Версий в этой сессии: {versions}")
+        st.caption("Сравнения и документы сохраняются в текущей сессии.")
         with st.expander("О прототипе", icon=":material/info:"):
             st.caption("Выбор участника — симуляция. Нет проверки личности, ЭЦП и корпоративных интеграций.")
             st.caption("Данные хранятся только в текущей сессии браузера. Полное обновление страницы может завершить сессию.")
@@ -750,35 +720,145 @@ def render_analysis_page():
             start_run(*[sorted((ROOT / "data" / "control" / side).glob("*.txt")) for side in ("before", "after")],
                       on_event=progress)
         progress.finish(success=st.session_state.result is not None)
+        if st.session_state.result is not None:
+            st.rerun()
 
     if st.session_state.error:
         st.error(st.session_state.error, icon=":material/error:")
     if st.session_state.result is None:
         return
 
+    render_comparison()
+
+
+COMPARISON_FIELDS = ("result", "journal", "run_id", "decisions", "source_documents",
+                     "chat_history", "active_version", "input_signature")
+
+
+def save_comparison():
+    if st.session_state.get("result") is None:
+        return
+    comparisons = st.session_state.setdefault("comparisons", {})
+    run_id = st.session_state.run_id
+    previous = comparisons.get(run_id, {})
+    docs = (st.session_state.get("source_documents") or {}).get("after", [])
+    comparisons[run_id] = {
+        **{key: deepcopy(st.session_state.get(key)) for key in COMPARISON_FIELDS},
+        "title": previous.get("title") or (docs[0]["name"].split("/", 1)[-1].split("_", 1)[-1] if docs else "Сравнение документов"),
+        "created_at": previous.get("created_at") or datetime.now().astimezone().strftime("%d.%m.%Y · %H:%M"),
+    }
+
+
+def open_comparison(run_id):
+    save_comparison()
+    record = st.session_state.comparisons[run_id]
+    for key in COMPARISON_FIELDS:
+        st.session_state[key] = deepcopy(record.get(key))
+    st.session_state.comparison_view = "detail"
+    st.session_state.comparison_section = "Результат"
+
+
+def new_comparison():
+    save_comparison()
+    clear_run()
+    for key in ("before_uploads", "after_uploads", "input_signature"):
+        st.session_state.pop(key, None)
+    st.session_state.comparison_view = "new"
+    st.session_state.comparison_section = "Результат"
+
+
+def show_comparisons():
+    save_comparison()
+    st.session_state.comparison_view = "list"
+
+
+def show_section(section):
+    st.session_state.comparison_section = section
+
+
+def render_comparisons():
+    st.title("Мои сравнения", anchor=False)
+    st.caption("Загрузите две редакции, посмотрите изменения и выберите дальнейшее действие.")
+    st.button("Сравнить документы", type="primary", icon=":material/add:", on_click=new_comparison)
+    comparisons = st.session_state.comparisons
+    if not comparisons:
+        st.info("Пока нет сравнений. Добавьте документы «до» и «после» или попробуйте пример на следующем экране.")
+        return
+    for run_id, record in reversed(list(comparisons.items())):
+        with st.container(border=True):
+            st.subheader(record["title"], anchor=False)
+            version_id = record.get("active_version")
+            state = approval_status(st.session_state.workspace, version_id) if version_id else "result"
+            label = {"result": "Результат готов", "not_started": "Подготовлено к согласованию",
+                     "pending": "На согласовании", "returned": "Требует доработки", "approved": "Согласовано"}[state]
+            st.caption(f"{record['created_at']} · {label} · Находок: {len(record['result'].get('findings', []))}")
+            st.button("Открыть сравнение", key=f"open:{run_id}", on_click=open_comparison, args=(run_id,), icon=":material/arrow_forward:")
+
+
+def render_comparison():
     result = st.session_state.result
-    st.divider()
-    st.header("2. Проверьте результат", anchor=False)
-    st.caption("Это результат последнего запуска. Начните с находок, затем проверьте функции и источники.")
-    render_overview(result)
-    if result.get("analysis_mode") == "local":
-        st.caption("Локальное сравнение реальных текстов. Извлечение может быть неполным — проверьте важные выводы по документам.")
-    with st.expander("Какие документы сравнивались", icon=":material/folder:"):
-        for side, docs in (st.session_state.source_documents or {}).items():
-            st.markdown("**До изменений**" if side == "before" else "**После изменений**")
-            for index, doc in enumerate(docs):
-                st.download_button(doc["name"], doc["content"], file_name=doc["name"].split("/")[-1],
-                                   key=f"source:{st.session_state.run_id}:{side}:{index}", icon=":material/download:")
-        st.caption("Источники относятся к этому комплекту. Синтетический пример не описывает обязанности реальных сотрудников.")
-    render_result(result)
-    st.divider()
-    st.header("3. Подготовьте согласование", anchor=False)
-    st.caption("После проверки выберите изменения и получателей. Созданная версия появится в разделе «Согласование».")
-    with st.expander("Выбрать изменения и создать версию", icon=":material/assignment:"):
-        render_impact(result)
-    if st.session_state.get("active_version"):
-        st.button("Открыть согласование", icon=":material/arrow_forward:",
-                  on_click=navigate, args=("Согласование",), key="open_approvals")
+    run_id = st.session_state.run_id
+    record = st.session_state.comparisons[run_id]
+    st.title(record["title"], anchor=False)
+    st.caption(f"Сравнение от {record['created_at']} · {WARNING}")
+    version_id = st.session_state.get("active_version")
+    approved = bool(version_id and approval_status(st.session_state.workspace, version_id) == "approved")
+    options = ["Результат", "Вопросы", "Согласование"]
+    if approved:
+        options.append("Ознакомление")
+    section = st.session_state.get("comparison_section", "Результат")
+    if section not in options:
+        section = "Результат"
+    with st.container(horizontal=True):
+        for option in options:
+            st.button(option, key=f"section:{option}", type="primary" if option == section else "secondary",
+                      on_click=show_section, args=(option,))
+    if section == "Вопросы":
+        render_chat_page()
+    elif section == "Согласование":
+        if version_id:
+            render_approvals(st.session_state.workspace, version_id)
+            if approval_status(st.session_state.workspace, version_id) == "returned":
+                with st.expander("Подготовить новую редакцию"):
+                    render_impact(result)
+            if approval_status(st.session_state.workspace, version_id) == "approved":
+                st.button("Назначить ознакомление", type="primary", on_click=show_section, args=("Ознакомление",))
+        else:
+            render_impact(result)
+    elif section == "Ознакомление":
+        render_acknowledgements(st.session_state.workspace, version_id)
+        with st.expander("Собрать пакет новичку"):
+            render_onboarding(st.session_state.workspace)
+    else:
+        st.subheader("Краткое резюме", anchor=False)
+        st.write(result.get("conclusion") or "Заключение отсутствует.")
+        findings = result.get("findings") or []
+        important = sorted(findings, key=lambda item: {"high": 0, "medium": 1, "low": 2}.get(item.get("severity"), 3))[:3]
+        st.subheader("Важные находки", anchor=False)
+        if not important:
+            st.info("Находки отсутствуют.")
+        for finding in important:
+            with st.expander(f"{SEVERITY_LABELS.get(finding.get('severity'), 'Не указана')} важность · {finding.get('title', 'Находка')}"):
+                st.write(finding.get("description", ""))
+                render_evidence(finding.get("evidence"))
+        with st.container(horizontal=True):
+            st.button("Задать вопрос", icon=":material/chat:", on_click=show_section, args=("Вопросы",))
+            st.button("Передать на согласование", icon=":material/assignment_turned_in:", on_click=show_section, args=("Согласование",))
+        from src.report import build_docx
+        st.download_button("Скачать отчёт", build_docx(result), file_name="comparison-report.docx",
+                           mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document", icon=":material/download:")
+        with st.expander("Графики и показатели"):
+            render_overview(result)
+        with st.expander("Все находки, функции и источники"):
+            render_result(result)
+        with st.expander("Исходные документы"):
+            for side, docs in (st.session_state.source_documents or {}).items():
+                st.caption("До" if side == "before" else "После")
+                for index, doc in enumerate(docs):
+                    st.download_button(doc["name"], doc["content"], file_name=doc["name"].split("/")[-1],
+                                       key=f"source:{run_id}:{side}:{index}")
+    save_comparison()
+
 
 
 def main():
@@ -787,24 +867,23 @@ def main():
         st.session_state.workspace = new_workspace()
     page = render_sidebar()
     install_transitions()
-    descriptions = {
-        "Анализ изменений": "Сравните две редакции документов, проверьте изменения и подготовьте их к согласованию.",
-        "ИИ-чат": "Задайте вопрос по сравниваемым документам и проверьте источники ответа.",
-        "Согласование": "Выберите версию документа и пройдите маршрут согласования по ролям.",
-        "Ознакомление": "Назначьте согласованные документы сотрудникам и отслеживайте ознакомление.",
-        "Документы новичка": "Соберите документы для нового сотрудника и проверьте, с чем он ознакомился.",
-    }
+    st.session_state.setdefault("comparisons", {})
+    st.session_state.setdefault("comparison_view", "list")
     with st.container(horizontal_alignment="center"):
         with st.container(width=1160):
-            st.title("Анализ организационной структуры" if page == "Анализ изменений" else page, anchor=False)
-            st.markdown(descriptions[page])
-            st.caption(f":material/info: {WARNING}")
-            if page == "Анализ изменений":
-                render_analysis_page()
-            elif page == "ИИ-чат":
-                render_chat_page()
+            if page == "Мои документы":
+                from app.acknowledgements import render_my_documents
+                st.title("Мои документы", anchor=False)
+                render_my_documents(st.session_state.workspace)
+            elif st.session_state.comparison_view == "list":
+                render_comparisons()
             else:
-                render_workflow_page(page)
+                st.button("Мои сравнения", icon=":material/arrow_back:", on_click=show_comparisons)
+                if st.session_state.comparison_view == "new":
+                    st.title("Сравнить документы", anchor=False)
+                    render_analysis_page()
+                elif st.session_state.get("result") is not None:
+                    render_comparison()
 
 
 if __name__ == "__main__":
