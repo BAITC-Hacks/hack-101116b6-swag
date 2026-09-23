@@ -513,12 +513,15 @@ def render_result(result):
 
 
 def render_impact(result):
-    st.subheader("Кого затронули изменения", anchor=False)
-    st.caption("Выберите изменения, проверьте источники и назначьте получателей. Отправки сообщений нет.")
     cards = impact_cards(result)
     if not cards:
-        st.info("Нет изменений с проверенными цитатами для передачи на согласование.")
+        with st.container(border=True, key="empty_approval"):
+            render_empty("Пока нечего согласовывать",
+                         "В этом сравнении нет изменений с подтверждёнными источниками. "
+                         "Если документы обновились, создайте новое сравнение.")
         return
+    st.subheader("Кого затронули изменения", anchor=False)
+    st.caption("Выберите изменения, проверьте источники и назначьте получателей. Отправки сообщений нет.")
     by_id = {card["id"]: card for card in cards}
     run_id = st.session_state.run_id
     selected = st.multiselect("Изменения для проверки", list(by_id),
@@ -936,7 +939,7 @@ def main():
                 render_onboarding_page(st.session_state.workspace)
         elif page == "Мои документы":
             from app.acknowledgements import render_my_documents
-            render_hero("Мои документы", compact=bool(st.session_state.workspace["acknowledgements"]))
+            render_hero("Мои документы", compact=True)
             st.html('<div id="workspace"></div>')
             with st.container(key="workspace"):
                 render_my_documents(st.session_state.workspace)

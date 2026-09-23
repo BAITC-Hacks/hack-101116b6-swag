@@ -513,9 +513,9 @@ def render_my_documents(workspace):
     people = {p["id"]: p for version in versions.values() for p in version["recipients"]}
     if not people:
         with st.container(border=True, key="empty_state"):
-            render_empty("Документы появятся после назначения",
-                         "Ответственный согласует версию и откроет ознакомление. Здесь вы увидите документы, "
-                         "назначенные вашей роли, и пакет для нового сотрудника.")
+            render_empty("Документов пока нет",
+                         "Когда ответственный согласует и назначит вам документы, они появятся здесь. "
+                         "Пока никаких действий не требуется.")
         return
     person_id = st.selectbox("Сотрудник", list(people), key="my-documents:person",
                              format_func=lambda pid: f"{people[pid]['name']} · {people[pid]['role']}")
