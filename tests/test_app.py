@@ -1,4 +1,8 @@
-"""Contract and real Streamlit state transitions for the local UI stub."""
+"""Legacy rendering regressions and the current offline analysis adapter.
+
+Legacy UI fixtures intentionally return run_stub. Real analysis and the complete
+workflow are exercised without that substitution in test_workflow.py.
+"""
 
 from copy import deepcopy
 from dataclasses import dataclass
@@ -31,7 +35,7 @@ def app_module(monkeypatch):
     config = importlib.import_module("src.config")
 
     def no_api(*args, **kwargs):
-        pytest.fail("The interface stub must never call an LLM")
+        pytest.fail("Offline interface tests must never call an LLM")
 
     monkeypatch.setattr(config, "get_llm", no_api)
     monkeypatch.setattr(config, "ask_llm", no_api)
@@ -47,7 +51,8 @@ def _render_app():
 @pytest.fixture
 def app_runtime(app_module, monkeypatch):
     calls = []
-    original = app_module.run_analysis
+    # Isolate pre-existing filters/reset behavior from extraction changes.
+    original = app_module.run_stub
 
     def tracked_run(before, after, log=None):
         calls.append((list(before), list(after)))
@@ -128,7 +133,7 @@ def test_stub_contract_is_deterministic_and_never_attributes_examples(app_module
     assert all("симуляция" in " ".join(event[1:]).lower() for event in events)
 
 
-def test_adapter_forces_stub_without_llm_even_outside_demo(app_module, monkeypatch):
+def test_adapter_calls_agent_without_llm_even_outside_demo(app_module, monkeypatch):
     monkeypatch.setenv("DEMO_MODE", "false")
     received = {}
     sentinel = {"local": True}
@@ -137,7 +142,7 @@ def test_adapter_forces_stub_without_llm_even_outside_demo(app_module, monkeypat
         received.update(before=before, after=after, use_llm=use_llm, log=log)
         return sentinel
 
-    monkeypatch.setattr(app_module, "run_stub", stub)
+    monkeypatch.setattr(app_module, "agent_run", stub)
     before, after = [Path("before.docx")], [Path("after.xlsx")]
     callback = lambda *args: None
     assert app_module.run_analysis(before, after, log=callback) is sentinel
@@ -145,8 +150,8 @@ def test_adapter_forces_stub_without_llm_even_outside_demo(app_module, monkeypat
 
 
 def test_uploads_have_safe_unique_names_and_live_until_context_exit(app_module):
-    before = [Upload("../../same.docx", b"first"), Upload("../../same.docx", b"second")]
-    after = [Upload("C:\\private\\same.docx", b"third"), Upload("table.xlsx", b"fourth")]
+    before = [Upload("../../same.txt", b"first"), Upload("../../same.txt", b"second")]
+    after = [Upload("C:\\private\\same.txt", b"third"), Upload("table.txt", b"fourth")]
     with app_module.materialize_uploads(before, after) as (before_paths, after_paths):
         paths = before_paths + after_paths
         assert isinstance(before_paths, list) and isinstance(after_paths, list)
@@ -156,10 +161,9 @@ def test_uploads_have_safe_unique_names_and_live_until_context_exit(app_module):
         assert all(path.parent.name == "after" for path in after_paths)
         assert before_paths[0].parent.parent == after_paths[0].parent.parent
         assert all(".." not in path.name and "\\" not in path.name for path in paths)
-        assert [path.suffix for path in paths] == [".docx", ".docx", ".docx", ".xlsx"]
+        assert [path.suffix for path in paths] == [".txt", ".txt", ".txt", ".txt"]
         assert [path.read_bytes() for path in paths] == [b"first", b"second", b"third", b"fourth"]
         assert not any(path.is_relative_to(Path(app_module.__file__).resolve().parents[1]) for path in paths)
-        app_module.run_analysis(before_paths, after_paths)
     assert all(not path.exists() for path in paths)
 
 
@@ -181,7 +185,7 @@ def test_demo_filters_decisions_and_fresh_run_are_stateful(app_runtime):
     assert [tab.label for tab in app.tabs] == [
         "Подразделения", "Сопоставление функций", "Находки", "Заключение", "Журнал агента"
     ]
-    assert any("документы не проанализированы" in warning.value.lower() for warning in app.warning)
+    assert any("Выводы рекомендательные" in warning.value for warning in app.warning)
     run_id = app.session_state["run_id"]
     snapshot = deepcopy(app.session_state["result"])
     journal = deepcopy(app.session_state["journal"])
@@ -229,7 +233,8 @@ def test_demo_filters_decisions_and_fresh_run_are_stateful(app_runtime):
 
 def test_changed_upload_content_hides_old_result_and_compare_uses_live_files(app_module, monkeypatch):
     calls = []
-    original = app_module.run_analysis
+    # Isolate pre-existing filters/reset behavior from extraction changes.
+    original = app_module.run_stub
 
     def tracked_run(before, after, log=None):
         assert all(path.is_file() for path in before + after)
@@ -240,13 +245,13 @@ def test_changed_upload_content_hides_old_result_and_compare_uses_live_files(app
     app = AppTest.from_function(_render_app, default_timeout=30).run()
     assert not app.exception
     assert all(uploader.accept_multiple_files for uploader in app.file_uploader)
-    assert all(set(uploader.allowed_type) == {".pdf", ".docx", ".xlsx"} for uploader in app.file_uploader)
+    assert all(set(uploader.allowed_type) == {".pdf", ".docx", ".xlsx", ".txt"} for uploader in app.file_uploader)
     app.file_uploader(key="before_uploads").set_value([
-        ("before.docx", b"version one", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+        ("before.txt", b"version one", "text/plain")
     ]).run()
     assert _button(app, "Сравнить").disabled
     app.file_uploader(key="after_uploads").set_value([
-        ("after.xlsx", b"comparison", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        ("after.txt", b"comparison", "text/plain")
     ]).run()
     assert not _button(app, "Сравнить").disabled
     _button(app, "Сравнить").click().run()
@@ -258,7 +263,7 @@ def test_changed_upload_content_hides_old_result_and_compare_uses_live_files(app
     finding_id = app.session_state["result"]["findings"][0]["id"]
     app.button(key=f"{run_id}:{finding_id}:confirm").click().run()
     app.file_uploader(key="before_uploads").set_value([
-        ("before.docx", b"version two", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+        ("before.txt", b"version two", "text/plain")
     ]).run()
     assert not app.exception
     assert not app.session_state["result"]

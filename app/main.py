@@ -1,4 +1,4 @@
-"""Streamlit prototype. All analysis results are explicitly fictional examples."""
+"""Document analysis and human review workflows; no identities or e-signatures."""
 
 import hashlib
 import math
@@ -19,12 +19,23 @@ if str(ROOT) not in sys.path:
 # src.config normally loads .env on import; this interface must not read that file.
 os.environ["PYTHON_DOTENV_DISABLED"] = "true"
 from src import config  # noqa: E402
+from src.agent import run as agent_run  # noqa: E402
+from src.parse import read_text  # noqa: E402
+from app.workflow import DEMO_PEOPLE, impact_cards, make_version, new_workspace  # noqa: E402
+from app.approvals import render_approvals  # noqa: E402
+from app.acknowledgements import render_acknowledgements, render_onboarding  # noqa: E402
 
-SUPPORTED_SUFFIXES = {".pdf", ".docx", ".xlsx"}
+SUPPORTED_SUFFIXES = {".pdf", ".docx", ".xlsx", ".txt"}
 WARNING = (
-    "Заглушка интерфейса: документы не проанализированы. "
-    "Показаны учебные примеры. Выводы рекомендательные"
+    "Выводы рекомендательные. Цитата подтверждает источник, а интерпретацию "
+    "и получателей изменений проверяет ответственный человек."
 )
+STATUS_LABELS = {
+    "created": "Выявлено только после · кандидат на создание", "removed": "Не найдено после · кандидат на упразднение",
+    "reorganized": "Признаки реорганизации", "kept": "Сопоставлено в обеих редакциях",
+    "moved": "Кандидат на передачу", "changed": "Кандидат на изменение",
+    "lost": "Пара не найдена · кандидат на потерю", "new": "Новая извлечённая функция",
+}
 TYPE_LABELS = {
     "loss": "Утрата функции",
     "duplicate": "Дублирование",
@@ -124,8 +135,8 @@ def run_stub(before: list[Path], after: list[Path], use_llm=True, log=None) -> d
 
 
 def run_analysis(before: list[Path], after: list[Path], log=None) -> dict:
-    """Single integration point for a future src.agent call, regardless of config."""
-    return run_stub(before, after, use_llm=False, log=log)
+    """Use the pipeline adapter in offline mode; an API key is never required."""
+    return agent_run(before, after, use_llm=False, log=log)
 
 
 def input_fingerprint(before, after):
@@ -166,7 +177,7 @@ def sample_paths():
 
 
 def clear_run():
-    st.session_state.update(result=None, journal=[], run_id=None, decisions={}, error=None)
+    st.session_state.update(result=None, journal=[], run_id=None, decisions={}, error=None, source_documents=None)
 
 
 def log(step, status, message):
@@ -185,15 +196,36 @@ def start_run(before, after, *, uploaded=False):
         if not before or not after:
             st.session_state.error = "Нужен хотя бы один файл с каждой стороны. Проверьте комплект и повторите запуск."
             return
+        def analyze(paths_before, paths_after, names_before, names_after):
+            documents = {}
+            labels = {}
+            for side, paths, names in (("before", paths_before, names_before), ("after", paths_after, names_after)):
+                documents[side] = []
+                for i, (path, name) in enumerate(zip(paths, names)):
+                    name = Path(name.replace("\\", "/")).name
+                    label = f"{'До' if side == 'before' else 'После'}/{i + 1}_{name}"
+                    documents[side].append({"name": label, "content": path.read_bytes(), "text": read_text(path)})
+                    labels[str(path)] = label
+            result = run_analysis(paths_before, paths_after, log=log)
+            # Resolve source labels while temporary files still exist; keep originals in memory.
+            for group in ("units", "function_map", "findings", "ambiguous_matches"):
+                for item in result.get(group, []):
+                    for source in item.get("evidence", []):
+                        source["doc"] = labels.get(source.get("doc"), source.get("doc", ""))
+            st.session_state.source_documents = documents
+            return result
+
         if uploaded:
+            if sum(len(upload.getvalue()) for upload in before + after) > 50 * 1024 * 1024:
+                raise ValueError("The session document limit is 50 MiB")
             with materialize_uploads(before, after) as (before_paths, after_paths):
-                result = run_analysis(before_paths, after_paths, log=log)
+                result = analyze(before_paths, after_paths, [u.name for u in before], [u.name for u in after])
         else:
-            result = run_analysis(before, after, log=log)
+            result = analyze(before, after, [p.name for p in before], [p.name for p in after])
         st.session_state.result = result
     except Exception:
         # Exception text may contain document contents, paths or credentials.
-        st.session_state.error = "Не удалось выполнить запуск интерфейса. Проверьте доступность файлов и повторите попытку."
+        st.session_state.error = "Не удалось проанализировать комплект. Проверьте формат, наличие текста и общий размер файлов (до 50 МБ)."
 
 
 def render_evidence(evidence):
@@ -231,7 +263,7 @@ def render_units(units):
         with st.container(border=True):
             st.subheader(unit.get("name") or "Название не указано", anchor=False)
             st.text(f"Сокращение: {unit.get('abbr') or 'не указано'}")
-            st.text(f"Статус: {unit.get('status') or 'не указан'}")
+            st.text(f"Статус: {STATUS_LABELS.get(unit.get('status'), unit.get('status') or 'не указан')}")
             render_evidence(unit.get("evidence"))
 
 
@@ -246,7 +278,7 @@ def render_functions(function_map):
                     st.caption(label)
                     st.text(item.get(f"{side}_unit") or "Подразделение не указано")
                     st.write(item.get(f"{side}_function") or "Функция не указана")
-            st.text(f"Статус: {item.get('status') or 'не указан'} · Сходство: {similarity_label(item.get('similarity'))}")
+            st.text(f"Статус: {STATUS_LABELS.get(item.get('status'), item.get('status') or 'не указан')} · Сходство: {similarity_label(item.get('similarity'))}")
             render_evidence(item.get("evidence"))
 
 
@@ -304,18 +336,107 @@ def render_result(result):
         render_units(result.get("units") or [])
     with tabs[1]:
         render_functions(result.get("function_map") or [])
+        ambiguous = result.get("ambiguous_matches") or []
+        if ambiguous:
+            st.warning(f"Неоднозначных записей: {len(ambiguous)}. Они не объявлены потерянными или новыми.")
+            for index, item in enumerate(ambiguous):
+                with st.expander(f"Требует проверки {index + 1}: {item.get('unit', '')}"):
+                    st.text(item.get("function", ""))
+                    for candidate in item.get("candidates", []):
+                        st.text(f"Кандидат: {candidate.get('unit', '')} · {candidate.get('function', '')}")
+                    render_evidence(item.get("evidence"))
     with tabs[2]:
         render_findings(result.get("findings") or [])
     with tabs[3]:
         st.write(result.get("conclusion") or "Заключение отсутствует.")
-        st.warning("Выводы рекомендательные. Учебные примеры нельзя использовать для решений по реальной оргструктуре.")
+        st.warning("Выводы рекомендательные. Локальные правила могут пропускать функции и неверно сопоставлять переформулировки.")
     with tabs[4]:
-        st.caption("Все этапы — симуляция. Чтение документов и проверка цитат не выполнялись.")
+        st.caption("Журнал фактически выполненных этапов. При локальном анализе LLM не вызывается.")
         if st.session_state.journal:
             st.dataframe(st.session_state.journal, hide_index=True, width="stretch",
                          column_config={"time": "Время", "step": "step", "status": "status", "message": "message"})
         else:
             st.info("Журнал пуст.")
+
+
+def render_impact(result):
+    st.header("Кого затронули изменения")
+    st.caption("Выберите изменения, проверьте источники и назначьте получателей. Отправки сообщений нет.")
+    cards = impact_cards(result)
+    if not cards:
+        st.info("Нет изменений с проверенными цитатами для передачи на согласование.")
+        return
+    by_id = {card["id"]: card for card in cards}
+    run_id = st.session_state.run_id
+    selected = st.multiselect("Изменения для проверки", list(by_id),
+                              format_func=lambda key: f"{by_id[key]['unit']} · {STATUS_LABELS.get(by_id[key]['status'], by_id[key]['status'])} · {by_id[key]['after'][:65]}",
+                              key=f"{run_id}:impact_selection")
+    people_text = st.text_area("Получатели: имя | должность или подразделение (одна строка на человека)",
+                              value="\n".join(f"{p['name']} | {p['role']}" for p in DEMO_PEOPLE), key=f"{run_id}:people")
+    recipients, invalid = [], False
+    for line in people_text.splitlines():
+        if not line.strip():
+            continue
+        parts = [part.strip() for part in line.split("|")]
+        if len(parts) != 2 or not all(parts):
+            invalid = True
+            break
+        recipients.append({"id": hashlib.sha256(line.strip().encode()).hexdigest()[:16], "name": parts[0], "role": parts[1]})
+    if invalid:
+        st.warning("В каждой строке нужны имя и роль, разделённые символом |.")
+        return
+    selected_cards = []
+    for key in selected:
+        card = dict(by_id[key])
+        with st.container(border=True):
+            st.subheader(card["unit"], anchor=False)
+            left, right = st.columns(2)
+            left.text("До: " + card["before"])
+            right.text("После: " + card["after"])
+            render_evidence(card["evidence"])
+            card["recipient_ids"] = st.multiselect(
+                "Кому относится это изменение", [p["id"] for p in recipients],
+                format_func=lambda value: next(p["name"] + " · " + p["role"] for p in recipients if p["id"] == value),
+                key=f"{run_id}:targets:{key}")
+        selected_cards.append(card)
+    title = st.text_input("Название пакета", value="Изменения обязанностей", key=f"{run_id}:version_title")
+    revision = st.text_input("Редакция пакета", value="1", key=f"{run_id}:revision")
+    reviewer = st.text_input("Ответственный за проверку", key=f"{run_id}:reviewed_by")
+    checked = st.checkbox("Я проверил выбранные изменения, цитаты и получателей", key=f"{run_id}:reviewed")
+    if st.button("Создать версию для согласования", disabled=not checked or not selected_cards, key=f"{run_id}:freeze"):
+        try:
+            assigned = {rid for c in selected_cards for rid in c["recipient_ids"]}
+            version_id = make_version(st.session_state.workspace, title=title, revision=revision, reviewed_by=reviewer,
+                                      documents=st.session_state.source_documents["after"],
+                                      reference_documents=st.session_state.source_documents["before"],
+                                      changes=selected_cards, recipients=[p for p in recipients if p["id"] in assigned])
+            st.session_state.active_version = version_id
+            st.success(f"Версия {revision} · {version_id[:12]} сохранена в этой сессии. Откройте «Согласование» слева.")
+        except ValueError as error:
+            st.error(str(error))
+
+
+def render_workflow_page(page):
+    workspace = st.session_state.workspace
+    if page == "Документы новичка":
+        render_onboarding(workspace)
+        return
+    versions = workspace["versions"]
+    if not versions:
+        st.info("Сначала выполните анализ, проверьте изменения и создайте версию для согласования.")
+        return
+    choices = list(versions)
+    active = st.session_state.get("active_version", choices[-1])
+    version_id = st.selectbox("Версия документа", choices, index=choices.index(active) if active in choices else 0,
+                             format_func=lambda vid: f"{versions[vid]['title']} · ред. {versions[vid]['revision']} · {vid[:12]}",
+                             key=f"workflow:{page}:version")
+    with st.expander("Исходные документы «до»"):
+        for index, doc in enumerate(versions[version_id].get("reference_documents", [])):
+            st.download_button(doc["name"], doc["content"], file_name=doc["name"].split("/")[-1], key=f"ref:{page}:{version_id}:{index}")
+    if page == "Согласование":
+        render_approvals(workspace, version_id)
+    else:
+        render_acknowledgements(workspace, version_id)
 
 
 def main():
@@ -327,21 +448,29 @@ def main():
     """, unsafe_allow_html=True)
     st.title("Анализ организационной структуры")
     st.warning(WARNING)
-    mode_label = "демо (без ключей)" if config.demo_mode() else "демо-режим выключен"
-    st.caption(f"Режим конфигурации: {mode_label}. В интерфейсе работает только локальная заглушка.")
+    st.caption("Анализ → проверка изменений → согласование → ознакомление. Работает без ключей.")
+    st.sidebar.markdown("## Документы и изменения")
+    page = st.sidebar.radio("Раздел", ["Анализ изменений", "Согласование", "Ознакомление", "Документы новичка"])
+    st.sidebar.info("Прототип: выбор участника — симуляция. Нет проверки личности, ЭЦП и корпоративных интеграций. Данные хранятся только в текущей сессии браузера.")
+    if "workspace" not in st.session_state:
+        st.session_state.workspace = new_workspace()
+    if page != "Анализ изменений":
+        render_workflow_page(page)
+        return
 
     if "result" not in st.session_state:
         clear_run()
+    st.caption("PDF, DOCX, XLSX или TXT · до 50 МБ на весь загружаемый комплект · PDF должен содержать текст.")
     before_column, after_column = st.columns(2)
     with before_column:
         with st.container(border=True):
             st.subheader("До", anchor=False)
-            before = st.file_uploader("До", type=["pdf", "docx", "xlsx"], accept_multiple_files=True,
+            before = st.file_uploader("До", type=["pdf", "docx", "xlsx", "txt"], accept_multiple_files=True,
                                       key="before_uploads", label_visibility="collapsed")
     with after_column:
         with st.container(border=True):
             st.subheader("После", anchor=False)
-            after = st.file_uploader("После", type=["pdf", "docx", "xlsx"], accept_multiple_files=True,
+            after = st.file_uploader("После", type=["pdf", "docx", "xlsx", "txt"], accept_multiple_files=True,
                                      key="after_uploads", label_visibility="collapsed")
 
     signature = input_fingerprint(before, after)
@@ -352,17 +481,29 @@ def main():
     compare_column, demo_column = st.columns(2)
     compare = compare_column.button("Сравнить", disabled=not (before and after), type="primary", width="stretch")
     demo = demo_column.button("Демо на тестовом комплекте", width="stretch")
+    synthetic = st.button("Синтетический пример: подключения и кабельные работы", width="stretch")
     if compare:
         start_run(before, after, uploaded=True)
     elif demo:
         start_run(*sample_paths())
+    elif synthetic:
+        start_run(*[sorted((ROOT / "data" / "control" / side).glob("*.txt")) for side in ("before", "after")])
 
     if st.session_state.error:
         st.error(st.session_state.error)
     if st.session_state.result is not None:
         st.divider()
-        st.caption("УЧЕБНЫЕ ПРИМЕРЫ · Не связаны с загруженными файлами и тестовым комплектом")
+        if st.session_state.result.get("analysis_mode") == "local":
+            st.info("Локальный анализ правилами и TF-IDF: реальные тексты читаются, но извлечение может быть неполным. LLM не используется.")
+        st.caption("Источники относятся к обработанному комплекту. Контрольный пример синтетический и не описывает обязанности сотрудников Казахтелекома.")
         render_result(st.session_state.result)
+        with st.expander("Оригиналы обработанных документов"):
+            for side, docs in (st.session_state.source_documents or {}).items():
+                for index, doc in enumerate(docs):
+                    st.download_button(doc["name"], doc["content"], file_name=doc["name"].split("/")[-1],
+                                       key=f"source:{st.session_state.run_id}:{side}:{index}")
+        st.divider()
+        render_impact(st.session_state.result)
     elif not st.session_state.error:
         st.info("Добавьте файлы с обеих сторон или откройте демо на тестовом комплекте.")
 
