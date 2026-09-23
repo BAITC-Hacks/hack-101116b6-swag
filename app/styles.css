@@ -61,6 +61,14 @@ a.hero-action:focus-visible { outline: 3px solid #629886; outline-offset: 4px; }
 .st-key-comparison_heading h1 { font-size: clamp(24px, 3vw, 34px); overflow-wrap: anywhere; letter-spacing: -.7px; }
 .st-key-comparison_nav { padding: 7px; border: 1px solid var(--org-border); border-radius: 16px; background: #eaf0e9; gap: 8px; }
 .st-key-comparison_nav .stButton button { min-width: 125px; }
+.st-key-ai_assistant_card { background: #e8f0e9; padding: 24px 28px; border: 1px solid #cbdccd; border-radius: 22px; box-shadow: var(--org-shadow); margin: 8px 0; }
+.st-key-ai_assistant_card [data-testid="stMarkdownContainer"] p { color: var(--org-muted); font-size: 15px; line-height: 1.6; }
+.st-key-ai_assistant_card .st-key-open_ai_chat button { min-height: 72px; border-radius: 15px; box-shadow: 0 4px 0 #173e34; }
+.st-key-ai_assistant_card .st-key-open_ai_chat button p { color: white; font-size: 19px; font-weight: 600; }
+[role="dialog"]:has(.st-key-ai_chat_history) { border-radius: 24px; border: 1px solid var(--org-border); box-shadow: 0 24px 90px #18372c38; }
+.st-key-newcomer_person, .st-key-newcomer_documents, .st-key-newcomer_preview { background: #fff; padding: 26px; border-radius: 22px; box-shadow: var(--org-shadow); }
+.st-key-newcomer_documents .stCheckbox { width: 100%; padding: 10px 0; border-bottom: 1px solid #e5ece4; }
+.st-key-newcomer_preview { border-left: 4px solid #729a7a; }
 .org-section-intro { margin: 8px 0; padding-left: 16px; border-left: 3px solid #9ab6a0; }
 .org-section-intro h2 { font-size: 22px; font-weight: 600; padding: 0; margin: 0 0 7px; letter-spacing: -.4px; }
 .org-section-intro p { font-size: 14px; line-height: 1.6; color: var(--org-muted); margin: 0; max-width: 820px; }
@@ -110,6 +118,7 @@ a.hero-action:focus-visible { outline: 3px solid #629886; outline-offset: 4px; }
   .org-steps { gap: 12px; }.org-steps li { gap: 9px; }.org-steps li div > span { font-size: 11px; }
 }
 @media (max-width: 680px) {
+  [role="dialog"]:has(.st-key-ai_chat_history) { max-height: calc(100dvh - 96px); overflow-y: auto; }
   [data-testid="stMainBlockContainer"] { padding: 2.6rem 1rem 1rem; }
   .st-key-app_shell { gap: 1rem; }.org-brand strong { font-size: 19px; }.org-brand span { font-size: 10px; }.org-brand img { width: 39px; height: 39px; }
   .st-key-brand_bar [data-testid="stHorizontalBlock"] { flex-wrap: nowrap; }.st-key-brand_bar [data-testid="stColumn"] { min-width: 0 !important; }

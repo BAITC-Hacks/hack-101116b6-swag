@@ -580,31 +580,63 @@ def render_impact(result):
             st.error(str(error))
 
 
-def render_chat_page():
+def open_ai_chat():
+    st.session_state.chat_dialog_run_id = st.session_state.run_id
+
+
+def close_ai_chat():
+    st.session_state.pop("chat_dialog_run_id", None)
+
+
+@st.dialog("ИИ-помощник", width="medium", icon=":material/chat:", on_dismiss=close_ai_chat)
+def render_ai_dialog():
+    record = st.session_state.comparisons.get(st.session_state.run_id, {})
+    st.caption(f"Текущее сравнение: {record.get('title', 'Документы')}")
+    render_chat_page(in_dialog=True)
+    if st.button("Вернуться к результату", key="close_ai_chat", icon=":material/arrow_back:"):
+        close_ai_chat()
+        st.rerun()
+
+
+def render_chat_page(*, in_dialog=False):
     if st.session_state.get("result") is None or not st.session_state.get("source_documents"):
         st.info("Сначала откройте сравнение с обработанными документами.")
         return
-    st.header("Вопросы по сравнению", anchor=False)
-    st.caption("Ответы ИИ — рекомендации по обработанному комплекту. Проверяйте приведённые пункты и цитаты.")
+    if not in_dialog:
+        st.header("Вопросы по сравнению", anchor=False)
+    st.caption("Ответы — рекомендации. Проверяйте пункты и цитаты." if in_dialog else
+               "Ответы ИИ — рекомендации по обработанному комплекту. Проверяйте приведённые пункты и цитаты.")
     if not config.openai_available():
         st.info("Без ключа работает поиск близких выдержек; ситуационные ответы ИИ недоступны.")
-    for message in st.session_state.get("chat_history", []):
-        with st.chat_message(message["role"]):
-            st.write(message["text"])
-            if message.get("evidence"):
-                render_evidence(message["evidence"])
+    with st.container(height=260 if in_dialog else "content", border=False,
+                      autoscroll=in_dialog, key="ai_chat_history" if in_dialog else "chat_page_history"):
+        if not st.session_state.get("chat_history"):
+            with st.chat_message("assistant"):
+                st.write("Что хотите уточнить в этом сравнении?")
+                st.caption("Например: «Кому передали обязанности?» или «Где есть дублирование функций?»")
+        for message in st.session_state.get("chat_history", []):
+            with st.chat_message(message["role"]):
+                st.write(message["text"])
+                if message.get("evidence"):
+                    render_evidence(message["evidence"])
     limit_reached = len(st.session_state.get("chat_history", [])) >= 40
     if limit_reached:
         st.info("Достигнут лимит 20 вопросов для этого сравнения. Новый анализ сбросит историю чата.")
     question = st.chat_input("Спросите о различиях или опишите ситуацию", max_chars=2000,
-                             disabled=limit_reached)
+                             disabled=limit_reached,
+                             key=f"chat:{st.session_state.run_id}:{'dialog' if in_dialog else 'page'}")
     if question:
+        if not question.strip():
+            st.warning("Введите вопрос по документам.")
+            return
         history = st.session_state.chat_history
-        reply = answer_question(question, st.session_state.source_documents,
-                                st.session_state.result, history)
+        with st.spinner("Ищу ответ в документах…"):
+            reply = answer_question(question, st.session_state.source_documents,
+                                    st.session_state.result, history)
         history.append({"role": "user", "text": question})
         history.append({"role": "assistant", "text": reply["answer"],
                         "evidence": reply["evidence"], "mode": reply["mode"]})
+        save_comparison()
         st.rerun()
 
 
@@ -628,7 +660,7 @@ def render_navigation():
                 st.caption("Данные хранятся только в текущей сессии браузера. Полное обновление страницы может завершить сессию.")
     with st.container(key="primary_nav"):
         page = st.radio(
-            "Раздел", ["Мои сравнения", "Мои документы"], key="active_page", label_visibility="collapsed", horizontal=True, width="stretch",
+            "Раздел", ["Мои сравнения", "Мои документы", "Документы новичка"], key="active_page", label_visibility="collapsed", horizontal=True, width="stretch",
         )
     return page
 
@@ -859,8 +891,15 @@ def render_comparison():
             with st.expander(f"{SEVERITY_LABELS.get(finding.get('severity'), 'Не указана')} важность · {finding.get('title', 'Находка')}"):
                 st.write(finding.get("description", ""))
                 render_evidence(finding.get("evidence"))
+        with st.container(border=True, key="ai_assistant_card"):
+            explanation, action = st.columns([2, 1], gap="medium", vertical_alignment="center")
+            with explanation:
+                st.subheader("ИИ-помощник по документам", anchor=False)
+                st.write("Обсудите изменения и найдите нужный пункт. Чат откроется в отдельном окне.")
+            with action:
+                st.button("Спросить ИИ", icon=":material/chat:", type="primary", width="stretch",
+                          key="open_ai_chat", on_click=open_ai_chat)
         with st.container(horizontal=True):
-            st.button("Задать вопрос", icon=":material/chat:", on_click=show_section, args=("Вопросы",))
             st.button("Передать на согласование", icon=":material/assignment_turned_in:", on_click=show_section, args=("Согласование",))
         from src.report import build_docx
         st.download_button("Скачать отчёт", build_docx(result), file_name="comparison-report.docx",
@@ -890,7 +929,12 @@ def main():
     with st.container(key="app_shell"):
         page = render_navigation()
         view = st.session_state.comparison_view
-        if page == "Мои документы":
+        if page == "Документы новичка":
+            from app.onboarding_ui import render_onboarding_page
+            render_hero("Документы новичка", compact=True)
+            with st.container(key="workspace"):
+                render_onboarding_page(st.session_state.workspace)
+        elif page == "Мои документы":
             from app.acknowledgements import render_my_documents
             render_hero("Мои документы", compact=bool(st.session_state.workspace["acknowledgements"]))
             st.html('<div id="workspace"></div>')
@@ -914,6 +958,12 @@ def main():
                 with st.container(key="workspace"):
                     render_comparison()
         render_footer()
+    dialog_run = st.session_state.get("chat_dialog_run_id")
+    if (dialog_run and dialog_run == st.session_state.get("run_id")
+            and page == "Мои сравнения" and view == "detail"):
+        render_ai_dialog()
+    elif dialog_run:
+        close_ai_chat()
 
 
 if __name__ == "__main__":
