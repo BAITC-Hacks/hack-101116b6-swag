@@ -1,21 +1,21 @@
 # Calm, local-only theme. Built-in fonts need no external font service.
 [theme]
 base = "light"
-primaryColor = "#356B70"
-backgroundColor = "#F5F7F8"
-secondaryBackgroundColor = "#E9EEF0"
-textColor = "#253744"
-borderColor = "#CCD7DD"
+primaryColor = "#24584B"
+backgroundColor = "#F5F7F4"
+secondaryBackgroundColor = "#EDF2EC"
+textColor = "#233D34"
+borderColor = "#DCE5DF"
 grayColor = "#5E717C"
 grayTextColor = "#526571"
-linkColor = "#356B70"
+linkColor = "#24584B"
 font = "sans-serif"
 headingFont = "sans-serif"
 baseFontSize = 16
 headingFontSizes = ["2rem", "1.5rem", "1.15rem", "1rem", "1rem", "1rem"]
 headingFontWeights = [650, 600, 600, 600, 600, 600]
-baseRadius = "8px"
-buttonRadius = "8px"
+baseRadius = "12px"
+buttonRadius = "11px"
 showWidgetBorder = true
 showSidebarBorder = true
 dataframeHeaderBackgroundColor = "#E9EEF0"
@@ -41,3 +41,6 @@ borderColor = "#CCD7DD"
 
 [browser]
 gatherUsageStats = false
+
+[client]
+toolbarMode = "minimal"

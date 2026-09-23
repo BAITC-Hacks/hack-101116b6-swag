@@ -416,9 +416,8 @@ def render_acknowledgements(workspace, version_id):
 
 def render_onboarding(workspace):
     import streamlit as st
+    from app.presentation import render_empty
 
-    st.text("Соберите документы для конкретного сотрудника и следите за прохождением его пакета.")
-    st.caption("В пакет входят опубликованные версии, назначенные сотруднику и его должности. Действия выполняются в режиме симуляции.")
     eligible = {}
     people = {}
     for version_id, version in workspace.get("versions", {}).items():
@@ -431,6 +430,13 @@ def render_onboarding(workspace):
             identity = (person.get("id"), person.get("role"), person.get("name"))
             if all(isinstance(value, str) and value.strip() for value in identity):
                 people[identity] = person
+    if not people and not workspace.get("onboarding"):
+        with st.container(border=True, key="empty_state"):
+            render_empty("Подготовьте документы к первому дню",
+                         "Сначала согласуйте версию и откройте ознакомление назначенным получателям. "
+                         "Затем выберите сотрудника и соберите его персональный пакет.", symbol="+" )
+        return
+    st.caption("В пакет входят опубликованные версии, назначенные сотруднику и его должности. Действия выполняются в режиме симуляции.")
     mode = st.radio("Просмотр пакета новичка", ["Назначить пакет", "Новичок (симуляция)"],
                     horizontal=True, key="onboarding:mode")
     if mode == "Назначить пакет":
@@ -500,13 +506,16 @@ def render_onboarding(workspace):
 def render_my_documents(workspace):
     """Employee inbox restricted to published versions assigned to the chosen person."""
     import streamlit as st
+    from app.presentation import render_empty
 
-    st.caption("Прочитайте назначенные документы, задайте вопрос и отметьте ознакомление.")
     st.caption("Прототип: выбор сотрудника — симуляция, без проверки личности и ЭЦП.")
     versions = {vid: workspace["versions"][vid] for vid in workspace.get("acknowledgements", {})}
     people = {p["id"]: p for version in versions.values() for p in version["recipients"]}
     if not people:
-        st.info("Пока нет назначенных документов. Они появятся после согласования и назначения ознакомления.")
+        with st.container(border=True, key="empty_state"):
+            render_empty("Документы появятся после назначения",
+                         "Ответственный согласует версию и откроет ознакомление. Здесь вы увидите документы, "
+                         "назначенные вашей роли, и пакет для нового сотрудника.")
         return
     person_id = st.selectbox("Сотрудник", list(people), key="my-documents:person",
                              format_func=lambda pid: f"{people[pid]['name']} · {people[pid]['role']}")

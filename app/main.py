@@ -24,6 +24,10 @@ from app.approvals import render_approvals, approval_status  # noqa: E402
 from app.acknowledgements import render_acknowledgements, render_onboarding  # noqa: E402
 from app.ai_assistant import answer_question, enrich_analysis  # noqa: E402
 from app.source_explorer import render_sources  # noqa: E402
+from app.presentation import (  # noqa: E402
+    install_design, render_brand, render_hero, render_notice,
+    render_empty, render_footer, render_section_intro,
+)
 from app.interactive_ui import (  # noqa: E402
     RunProgress, install_transitions, motion_control, render_animated_chart,
     render_findings_overview, upload_summary,
@@ -577,10 +581,10 @@ def render_impact(result):
 
 
 def render_chat_page():
-    st.header("Вопросы по сравнению", anchor=False)
     if st.session_state.get("result") is None or not st.session_state.get("source_documents"):
-        st.info("Сначала сравните документы в разделе «Анализ изменений».")
+        st.info("Сначала откройте сравнение с обработанными документами.")
         return
+    st.header("Вопросы по сравнению", anchor=False)
     st.caption("Ответы ИИ — рекомендации по обработанному комплекту. Проверяйте приведённые пункты и цитаты.")
     if not config.openai_available():
         st.info("Без ключа работает поиск близких выдержек; ситуационные ответы ИИ недоступны.")
@@ -604,21 +608,28 @@ def render_chat_page():
         st.rerun()
 
 
-def render_sidebar():
-    with st.sidebar:
-        st.markdown("### :material/account_tree: Оргструктура")
-        st.caption("Документы и изменения")
-        page = st.radio("Раздел", ["Мои сравнения", "Мои документы"],
-                        key="active_page", label_visibility="collapsed")
-        st.divider()
-        st.caption("Сравнения и документы сохраняются в текущей сессии.")
-        with st.expander("О прототипе", icon=":material/info:"):
-            st.caption("Выбор участника — симуляция. Нет проверки личности, ЭЦП и корпоративных интеграций.")
-            st.caption("Данные хранятся только в текущей сессии браузера. Полное обновление страницы может завершить сессию.")
-        with_ai = config.openai_available() and st.session_state.get("ai_enabled", True)
-        st.badge("Локально + OpenAI" if with_ai else "Локальный анализ",
-                 icon=":material/computer:", color="gray")
-        motion_control()
+def render_navigation():
+    with st.container(key="brand_bar"):
+        brand, settings = st.columns([4, 1], vertical_alignment="center")
+        with brand:
+            render_brand()
+        with settings:
+            with st.popover("Параметры", icon=":material/tune:", width="stretch"):
+                st.markdown("**Рабочее пространство**")
+                versions = len(st.session_state.workspace["versions"])
+                st.caption(f"Версий в этой сессии: {versions}")
+                with_ai = config.openai_available() and st.session_state.get("ai_enabled", True)
+                st.badge("Локально + OpenAI" if with_ai else "Локальный анализ",
+                         icon=":material/computer:", color="gray")
+                motion_control()
+                st.divider()
+                st.markdown("**О прототипе**")
+                st.caption("Выбор участника — симуляция. Нет проверки личности, ЭЦП и корпоративных интеграций.")
+                st.caption("Данные хранятся только в текущей сессии браузера. Полное обновление страницы может завершить сессию.")
+    with st.container(key="primary_nav"):
+        page = st.radio(
+            "Раздел", ["Мои сравнения", "Мои документы"], key="active_page", label_visibility="collapsed", horizontal=True, width="stretch",
+        )
     return page
 
 
@@ -777,21 +788,25 @@ def show_section(section):
 
 
 def render_comparisons():
-    st.title("Мои сравнения", anchor=False)
-    st.caption("Загрузите две редакции, посмотрите изменения и выберите дальнейшее действие.")
-    st.button("Сравнить документы", type="primary", icon=":material/add:", on_click=new_comparison)
     comparisons = st.session_state.comparisons
     if not comparisons:
-        st.info("Пока нет сравнений. Добавьте документы «до» и «после» или попробуйте пример на следующем экране.")
+        with st.container(border=True, key="empty_state"):
+            render_empty("Начните с первого сравнения", "Загрузите документы «до» и «после» или попробуйте готовый пример. "
+                         "Здесь появятся результаты, вопросы и статус согласования каждого комплекта.", symbol="↔")
+            st.button("Сравнить документы", type="primary", icon=":material/add:", on_click=new_comparison)
         return
+    with st.container(horizontal=True, vertical_alignment="center"):
+        st.button("Сравнить документы", type="primary", icon=":material/add:", on_click=new_comparison)
+        st.caption(f"Сравнений в этой сессии: {len(comparisons)}")
     for run_id, record in reversed(list(comparisons.items())):
-        with st.container(border=True):
+        with st.container(border=True, key=f"comparison_card_{run_id}"):
             st.subheader(record["title"], anchor=False)
             version_id = record.get("active_version")
             state = approval_status(st.session_state.workspace, version_id) if version_id else "result"
             label = {"result": "Результат готов", "not_started": "Подготовлено к согласованию",
                      "pending": "На согласовании", "returned": "Требует доработки", "approved": "Согласовано"}[state]
-            st.caption(f"{record['created_at']} · {label} · Находок: {len(record['result'].get('findings', []))}")
+            st.badge(label, color="green" if state == "approved" else "gray")
+            st.caption(f"{record['created_at']} · Находок: {len(record['result'].get('findings', []))}")
             st.button("Открыть сравнение", key=f"open:{run_id}", on_click=open_comparison, args=(run_id,), icon=":material/arrow_forward:")
 
 
@@ -799,8 +814,10 @@ def render_comparison():
     result = st.session_state.result
     run_id = st.session_state.run_id
     record = st.session_state.comparisons[run_id]
-    st.title(record["title"], anchor=False)
-    st.caption(f"Сравнение от {record['created_at']} · {WARNING}")
+    with st.container(border=True, key="comparison_heading"):
+        st.caption(f"СРАВНЕНИЕ ДОКУМЕНТОВ · {record['created_at']}")
+        st.title(record["title"], anchor=False)
+        render_notice(WARNING)
     version_id = st.session_state.get("active_version")
     approved = bool(version_id and approval_status(st.session_state.workspace, version_id) == "approved")
     options = ["Результат", "Вопросы", "Согласование"]
@@ -809,10 +826,11 @@ def render_comparison():
     section = st.session_state.get("comparison_section", "Результат")
     if section not in options:
         section = "Результат"
-    with st.container(horizontal=True):
+    with st.container(horizontal=True, key="comparison_nav"):
         for option in options:
             st.button(option, key=f"section:{option}", type="primary" if option == section else "secondary",
                       on_click=show_section, args=(option,))
+    render_section_intro(section)
     if section == "Вопросы":
         render_chat_page()
     elif section == "Согласование":
@@ -862,28 +880,40 @@ def render_comparison():
 
 
 def main():
-    st.set_page_config(page_title="Анализ организационной структуры", page_icon=":material/account_tree:", layout="wide")
+    st.set_page_config(page_title="Оргструктура · документы и решения", page_icon=":material/account_tree:", layout="wide")
     if "workspace" not in st.session_state:
         st.session_state.workspace = new_workspace()
-    page = render_sidebar()
-    install_transitions()
     st.session_state.setdefault("comparisons", {})
     st.session_state.setdefault("comparison_view", "list")
-    with st.container(horizontal_alignment="center"):
-        with st.container(width=1160):
-            if page == "Мои документы":
-                from app.acknowledgements import render_my_documents
-                st.title("Мои документы", anchor=False)
+    install_design()
+    install_transitions()
+    with st.container(key="app_shell"):
+        page = render_navigation()
+        view = st.session_state.comparison_view
+        if page == "Мои документы":
+            from app.acknowledgements import render_my_documents
+            render_hero("Мои документы", compact=bool(st.session_state.workspace["acknowledgements"]))
+            st.html('<div id="workspace"></div>')
+            with st.container(key="workspace"):
                 render_my_documents(st.session_state.workspace)
-            elif st.session_state.comparison_view == "list":
+        elif view == "list":
+            render_hero("Мои сравнения", compact=bool(st.session_state.comparisons))
+            render_notice(WARNING)
+            st.html('<div id="workspace"></div>')
+            with st.container(key="workspace"):
                 render_comparisons()
-            else:
-                st.button("Мои сравнения", icon=":material/arrow_back:", on_click=show_comparisons)
-                if st.session_state.comparison_view == "new":
-                    st.title("Сравнить документы", anchor=False)
+        else:
+            st.button("Мои сравнения", icon=":material/arrow_back:", on_click=show_comparisons)
+            if view == "new":
+                render_hero("Анализ изменений", compact=True)
+                render_notice(WARNING)
+                st.html('<div id="workspace"></div>')
+                with st.container(key="workspace"):
                     render_analysis_page()
-                elif st.session_state.get("result") is not None:
+            elif st.session_state.get("result") is not None:
+                with st.container(key="workspace"):
                     render_comparison()
+        render_footer()
 
 
 if __name__ == "__main__":
