@@ -1,11 +1,5 @@
-"""Ключи, демо-режим и вызов LLM. Проект обязан работать без ключей."""
+"""Ключи только из окружения; проект работает и без них."""
 import os
-
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-except ImportError:
-    pass
 
 
 def _env(name, default=""):
@@ -19,13 +13,17 @@ def demo_mode() -> bool:
     return not (_env("OPENAI_API_KEY") or _env("NVIDIA_API_KEY"))
 
 
+def openai_available() -> bool:
+    return not demo_mode() and bool(_env("OPENAI_API_KEY"))
+
+
 def get_llm():
     """(client, model) или (None, None) в демо-режиме."""
     if demo_mode():
         return None, None
     from openai import OpenAI
     if _env("OPENAI_API_KEY"):
-        return OpenAI(api_key=_env("OPENAI_API_KEY")), _env("OPENAI_MODEL", "gpt-4o-mini")
+        return OpenAI(api_key=_env("OPENAI_API_KEY"), timeout=45, max_retries=1), _env("OPENAI_MODEL", "gpt-5.4-mini")
     if _env("NVIDIA_API_KEY"):
         return OpenAI(api_key=_env("NVIDIA_API_KEY"), base_url=_env("NVIDIA_BASE_URL")), _env("NVIDIA_MODEL")
     return None, None

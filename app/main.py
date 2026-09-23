@@ -2,7 +2,6 @@
 
 import hashlib
 import math
-import os
 import sys
 from contextlib import contextmanager
 from datetime import datetime
@@ -16,14 +15,13 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-# src.config normally loads .env on import; this interface must not read that file.
-os.environ["PYTHON_DOTENV_DISABLED"] = "true"
 from src import config  # noqa: E402
 from src.agent import run as agent_run  # noqa: E402
 from src.parse import read_text  # noqa: E402
 from app.workflow import DEMO_PEOPLE, impact_cards, make_version, new_workspace  # noqa: E402
 from app.approvals import render_approvals  # noqa: E402
 from app.acknowledgements import render_acknowledgements, render_onboarding  # noqa: E402
+from app.ai_assistant import answer_question, enrich_analysis  # noqa: E402
 
 SUPPORTED_SUFFIXES = {".pdf", ".docx", ".xlsx", ".txt"}
 WARNING = (
@@ -135,8 +133,11 @@ def run_stub(before: list[Path], after: list[Path], use_llm=True, log=None) -> d
 
 
 def run_analysis(before: list[Path], after: list[Path], log=None) -> dict:
-    """Use the pipeline adapter in offline mode; an API key is never required."""
-    return agent_run(before, after, use_llm=False, log=log)
+    """Keep the verified local result and optionally add separate AI candidates."""
+    result = agent_run(before, after, use_llm=False, log=log)
+    if st.session_state.get("ai_enabled", False) and config.openai_available():
+        return enrich_analysis(result, before, after, log=log)
+    return result
 
 
 def input_fingerprint(before, after):
@@ -177,7 +178,8 @@ def sample_paths():
 
 
 def clear_run():
-    st.session_state.update(result=None, journal=[], run_id=None, decisions={}, error=None, source_documents=None)
+    st.session_state.update(result=None, journal=[], run_id=None, decisions={}, error=None,
+                            source_documents=None, chat_history=[])
 
 
 def log(step, status, message):
@@ -206,9 +208,10 @@ def start_run(before, after, *, uploaded=False):
                     label = f"{'До' if side == 'before' else 'После'}/{i + 1}_{name}"
                     documents[side].append({"name": label, "content": path.read_bytes(), "text": read_text(path)})
                     labels[str(path)] = label
-            result = run_analysis(paths_before, paths_after, log=log)
+            with st.spinner("Сравниваем документы и проверяем изменённые пункты..."):
+                result = run_analysis(paths_before, paths_after, log=log)
             # Resolve source labels while temporary files still exist; keep originals in memory.
-            for group in ("units", "function_map", "findings", "ambiguous_matches"):
+            for group in ("units", "function_map", "findings", "ambiguous_matches", "ai_insights"):
                 for item in result.get(group, []):
                     for source in item.get("evidence", []):
                         source["doc"] = labels.get(source.get("doc"), source.get("doc", ""))
@@ -350,8 +353,18 @@ def render_result(result):
     with tabs[3]:
         st.write(result.get("conclusion") or "Заключение отсутствует.")
         st.warning("Выводы рекомендательные. Локальные правила могут пропускать функции и неверно сопоставлять переформулировки.")
+        if result.get("ai_status"):
+            st.info(result["ai_status"])
+        if result.get("ai_insights"):
+            st.subheader("Наблюдения ИИ для проверки", anchor=False)
+            st.caption("Модель анализирует изменённые пункты. Наблюдения не добавлены в проверенное заключение автоматически.")
+            for item in result["ai_insights"]:
+                with st.container(border=True):
+                    st.write(f"**{item['summary']}**")
+                    st.write(item["explanation"])
+                    render_evidence(item["evidence"])
     with tabs[4]:
-        st.caption("Журнал фактически выполненных этапов. При локальном анализе LLM не вызывается.")
+        st.caption("Журнал фактически выполненных этапов; вызов OpenAI отмечается отдельно.")
         if st.session_state.journal:
             st.dataframe(st.session_state.journal, hide_index=True, width="stretch",
                          column_config={"time": "Время", "step": "step", "status": "status", "message": "message"})
@@ -439,6 +452,34 @@ def render_workflow_page(page):
         render_acknowledgements(workspace, version_id)
 
 
+def render_chat_page():
+    st.header("ИИ-чат по изменениям")
+    if st.session_state.get("result") is None or not st.session_state.get("source_documents"):
+        st.info("Сначала сравните документы в разделе «Анализ изменений».")
+        return
+    st.caption("Ответы ИИ — рекомендации по обработанному комплекту. Проверяйте приведённые пункты и цитаты.")
+    if not config.openai_available():
+        st.info("Без ключа работает поиск близких выдержек; ситуационные ответы ИИ недоступны.")
+    for message in st.session_state.get("chat_history", []):
+        with st.chat_message(message["role"]):
+            st.write(message["text"])
+            if message.get("evidence"):
+                render_evidence(message["evidence"])
+    limit_reached = len(st.session_state.get("chat_history", [])) >= 40
+    if limit_reached:
+        st.info("Достигнут лимит 20 вопросов для этого сравнения. Новый анализ сбросит историю чата.")
+    question = st.chat_input("Спросите о различиях или опишите ситуацию", max_chars=2000,
+                             disabled=limit_reached)
+    if question:
+        history = st.session_state.chat_history
+        reply = answer_question(question, st.session_state.source_documents,
+                                st.session_state.result, history)
+        history.append({"role": "user", "text": question})
+        history.append({"role": "assistant", "text": reply["answer"],
+                        "evidence": reply["evidence"], "mode": reply["mode"]})
+        st.rerun()
+
+
 def main():
     st.set_page_config(page_title="Анализ организационной структуры", page_icon="↔", layout="wide")
     st.markdown("""
@@ -450,10 +491,13 @@ def main():
     st.warning(WARNING)
     st.caption("Анализ → проверка изменений → согласование → ознакомление. Работает без ключей.")
     st.sidebar.markdown("## Документы и изменения")
-    page = st.sidebar.radio("Раздел", ["Анализ изменений", "Согласование", "Ознакомление", "Документы новичка"])
+    page = st.sidebar.radio("Раздел", ["Анализ изменений", "ИИ-чат", "Согласование", "Ознакомление", "Документы новичка"])
     st.sidebar.info("Прототип: выбор участника — симуляция. Нет проверки личности, ЭЦП и корпоративных интеграций. Данные хранятся только в текущей сессии браузера.")
     if "workspace" not in st.session_state:
         st.session_state.workspace = new_workspace()
+    if page == "ИИ-чат":
+        render_chat_page()
+        return
     if page != "Анализ изменений":
         render_workflow_page(page)
         return
@@ -478,6 +522,11 @@ def main():
         clear_run()
         st.session_state.input_signature = signature
 
+    available = config.openai_available()
+    st.toggle("Улучшить анализ с OpenAI", value=available,
+              disabled=not available, key="ai_enabled",
+              help="Изменённые пункты передаются в OpenAI. Без ключа анализ выполняется локально.")
+
     compare_column, demo_column = st.columns(2)
     compare = compare_column.button("Сравнить", disabled=not (before and after), type="primary", width="stretch")
     demo = demo_column.button("Демо на тестовом комплекте", width="stretch")
@@ -493,7 +542,7 @@ def main():
         st.error(st.session_state.error)
     if st.session_state.result is not None:
         st.divider()
-        if st.session_state.result.get("analysis_mode") == "local":
+        if st.session_state.result.get("analysis_mode") == "local" and not st.session_state.result.get("ai_status"):
             st.info("Локальный анализ правилами и TF-IDF: реальные тексты читаются, но извлечение может быть неполным. LLM не используется.")
         st.caption("Источники относятся к обработанному комплекту. Контрольный пример синтетический и не описывает обязанности сотрудников Казахтелекома.")
         render_result(st.session_state.result)
