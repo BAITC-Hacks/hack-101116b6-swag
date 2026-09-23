@@ -242,16 +242,25 @@ def _render_changes(version, recipient_id):
 
     changes = [item for item in version.get("changes", [])
                if recipient_id in item.get("recipient_ids", [])]
-    st.markdown("**Изменения, назначенные ответственным для вашей роли**")
+    st.subheader("Изменения для вашей роли", anchor=False)
+    st.caption("Ответственный назначил эти изменения выбранному сотруднику.")
     if not changes:
         st.caption("Персональные изменения не назначены. Ознакомьтесь с оригиналами.")
     for change in changes:
         with st.expander(str(change.get("unit") or "Изменение")):
-            st.text(f"Было: {change.get('before') or 'Не указано'}")
-            st.text(f"Стало: {change.get('after') or 'Не указано'}")
+            before, after = st.columns(2)
+            with before:
+                st.caption("Было")
+                st.text(change.get("before") or "Не указано")
+            with after:
+                st.caption("Стало")
+                st.text(change.get("after") or "Не указано")
             for evidence in change.get("evidence", []):
-                st.text(f"Источник: {evidence.get('doc', '')}, пункт {evidence.get('clause', '')}")
-                st.text(evidence.get("quote", ""))
+                with st.expander(
+                    f"{evidence.get('doc') or 'Источник не указан'} · "
+                    f"пункт {evidence.get('clause') or 'не указан'}"
+                ):
+                    st.text(evidence.get("quote") or "Цитата не указана")
     st.caption("Пояснения не заменяют оригинал документа.")
 
 
@@ -262,48 +271,65 @@ def _render_document(workspace, version_id, recipient_id, index, namespace):
     document = _document(version, index)
     record = _record(workspace, version_id, recipient_id, index)
     key = f"{namespace}:{version_id}:{recipient_id}:{index}"
-    with st.expander(f"{index + 1}. {document.get('name', 'Документ')}", expanded=True):
+    with st.container(border=True):
+        st.subheader(f"{index + 1}. {document.get('name', 'Документ')}", anchor=False)
         st.caption(f"Версия: {version_id}")
         content = document.get("content")
+        if record["acknowledged_at"]:
+            st.badge("Ознакомлен", icon=":material/check:", color="primary")
+            st.caption(f"Отметка сохранена: {record['acknowledged_at']}")
+        else:
+            st.badge("Ожидает ознакомления", color="gray")
         if isinstance(content, bytes):
             filename = str(document.get("name") or f"document-{index + 1}")
             filename = filename.replace("\\", "/").rsplit("/", 1)[-1] or "document"
             st.download_button("Скачать оригинал", data=content,
                                file_name=filename,
                                mime=mimetypes.guess_type(filename)[0] or "application/octet-stream",
-                               key=f"{key}:download")
+                               key=f"{key}:download", icon=":material/download:")
         else:
             st.warning("Оригинал недоступен. Подтверждение ознакомления отключено.")
         if document.get("text"):
-            with st.expander("Текст документа"):
+            with st.expander(f"Текст документа: {document.get('name', 'Документ')}"):
                 st.text(document["text"])
-        if record["acknowledged_at"]:
-            st.success(f"Ознакомлен · {record['acknowledged_at']}")
         if st.button("Ознакомлен с этой версией документа", key=f"{key}:ack",
-                     disabled=bool(record["acknowledged_at"]) or not isinstance(content, bytes)):
+                     disabled=bool(record["acknowledged_at"]) or not isinstance(content, bytes),
+                     type="primary", icon=":material/check:",
+                     help="Сохранит отметку только для выбранного сотрудника и этой версии документа."):
             acknowledge_document(workspace, version_id, recipient_id, index)
             st.rerun()
-        with st.form(f"{key}:question-form", clear_on_submit=True):
-            question = st.text_area("Вопрос по документу", key=f"{key}:question", max_chars=4000)
-            if st.form_submit_button("Задать вопрос"):
+        st.caption("Вопрос ответственному можно задать отдельно. Он не заменяет отметку об ознакомлении.")
+        with st.form(f"{key}:question-form", clear_on_submit=True, border=False):
+            question = st.text_area(
+                "Вопрос по документу", key=f"{key}:question", max_chars=4000,
+                placeholder="Укажите пункт документа и что требуется пояснить.", height=100,
+            )
+            if st.form_submit_button("Задать вопрос", icon=":material/chat:"):
                 try:
                     ask_question(workspace, version_id, recipient_id, index, question)
                     st.rerun()
                 except ValueError as exc:
                     st.error(str(exc))
         for entry in record["questions"]:
-            st.text(f"Вопрос ({entry['asked_at']}): {entry['question']}")
+            st.caption(f"Вопрос · {entry['asked_at']}")
+            st.text(entry["question"])
             if entry["answer"] is not None:
-                st.text(f"Ответ ({entry['answered_by']}, {entry['answered_at']}): {entry['answer']}")
+                st.caption(f"Ответ · {entry['answered_by']} · {entry['answered_at']}")
+                st.text(entry["answer"])
             else:
-                st.caption("Ожидает ответа. Вопрос не засчитывается как ознакомление.")
+                st.badge("Ожидает ответа", color="gray")
 
 
 def _render_supervisor(workspace, version_id):
     import streamlit as st
 
     rows = acknowledgement_summary(workspace, version_id)
+    st.subheader("Статус ознакомления", anchor=False)
     if rows:
+        acknowledged = sum(bool(row["acknowledged_at"]) for row in rows)
+        st.progress(acknowledged / len(rows),
+                    text=f"Отметок об ознакомлении: {acknowledged} из {len(rows)}")
+        st.caption("Каждая строка — один сотрудник и один документ этой версии.")
         st.dataframe([{
             "Сотрудник": row["name"], "Должность": row["role"],
             "Документ": row["document_name"], "Версия": row["version_id"],
@@ -312,6 +338,11 @@ def _render_supervisor(workspace, version_id):
             "Вопросов без ответа": row["open_questions"],
         } for row in rows], hide_index=True, width="stretch")
     publication = workspace["acknowledgements"][version_id]
+    if any(row["question_count"] for row in rows):
+        st.subheader("Вопросы сотрудников", anchor=False)
+        st.caption("Ответ сохраняется в истории вопроса и доступен сотруднику.")
+    else:
+        st.caption("Вопросов по этой версии пока нет.")
     for row in rows:
         record = publication["recipients"][row["recipient_id"]]["documents"][str(row["document_index"])]
         for question in record["questions"]:
@@ -319,12 +350,18 @@ def _render_supervisor(workspace, version_id):
                 st.text(question["question"])
                 st.caption(f"Версия: {version_id} · задан {question['asked_at']}")
                 if question["answer"] is not None:
+                    st.badge("Ответ сохранён", color="primary")
                     st.text(f"{question['answered_by']}: {question['answer']}")
                     continue
-                with st.form(f"ack:answer:{version_id}:{question['id']}"):
-                    author = st.text_input("Ответственный", value=_version(workspace, version_id).get("reviewed_by", ""))
-                    answer = st.text_area("Ответ", max_chars=4000)
-                    if st.form_submit_button("Сохранить ответ"):
+                st.badge("Ожидает ответа", color="gray")
+                with st.form(f"ack:answer:{version_id}:{question['id']}", border=False):
+                    author = st.text_input(
+                        "Ответственный", value=_version(workspace, version_id).get("reviewed_by", ""),
+                        placeholder="Имя ответственного",
+                    )
+                    answer = st.text_area("Ответ", max_chars=4000,
+                                          placeholder="Поясните требование и сошлитесь на пункт документа.")
+                    if st.form_submit_button("Сохранить ответ", type="primary", icon=":material/save:"):
                         try:
                             answer_question(workspace, version_id, row["recipient_id"],
                                             row["document_index"], question["id"], answer, author)
@@ -337,7 +374,7 @@ def render_acknowledgements(workspace, version_id):
     import streamlit as st
 
     version = _version(workspace, version_id)
-    st.subheader("Ознакомление сотрудников")
+    st.text("Откройте сотрудникам согласованную версию, отслеживайте ознакомление и отвечайте на вопросы.")
     st.caption("Симуляция ролей: выбор сотрудника не подтверждает его личность. «Ознакомлен» не является ЭЦП.")
     try:
         _approved(workspace, version_id)
@@ -346,14 +383,20 @@ def render_acknowledgements(workspace, version_id):
         return
     publication = workspace.get("acknowledgements", {}).get(version_id)
     if not publication:
-        st.write(f"Получателей: {len(version.get('recipients', []))}. Версия: {version_id}.")
-        if st.button("Открыть ознакомление назначенным сотрудникам", key=f"ack:publish:{version_id}"):
-            try:
-                publish_version(workspace, version_id)
-                st.rerun()
-            except ValueError as exc:
-                st.error(str(exc))
+        with st.container(border=True):
+            st.subheader("Доступ к согласованной версии", anchor=False)
+            st.badge("Готова к ознакомлению", color="primary", icon=":material/check_circle:")
+            st.text(f"Получателей: {len(version.get('recipients', []))}. Версия: {version_id}.")
+            st.caption("Каждый получатель увидит оригиналы и изменения, назначенные для его роли.")
+            if st.button("Открыть ознакомление назначенным сотрудникам", key=f"ack:publish:{version_id}",
+                         type="primary", icon=":material/visibility:"):
+                try:
+                    publish_version(workspace, version_id)
+                    st.rerun()
+                except ValueError as exc:
+                    st.error(str(exc))
         return
+    st.badge("Ознакомление открыто", color="primary")
     st.caption(f"Ознакомление открыто: {publication['published_at']}. Версия: {version_id}")
     mode = st.radio("Просмотр ознакомления", ["Ответственный", "Сотрудник (симуляция)"],
                     horizontal=True, key=f"ack:mode:{version_id}")
@@ -363,8 +406,10 @@ def render_acknowledgements(workspace, version_id):
     people = {person["id"]: person for person in version["recipients"]}
     recipient_id = st.selectbox("Сотрудник", list(people),
                                 format_func=lambda value: f"{people[value]['name']} · {people[value]['role']}",
-                                key=f"ack:person:{version_id}")
+                                key=f"ack:person:{version_id}",
+                                help="Показываются только документы и изменения, назначенные этому сотруднику.")
     _render_changes(version, recipient_id)
+    st.subheader("Документы для ознакомления", anchor=False)
     for index in range(len(version["documents"])):
         _render_document(workspace, version_id, recipient_id, index, "ack:reader")
 
@@ -372,8 +417,8 @@ def render_acknowledgements(workspace, version_id):
 def render_onboarding(workspace):
     import streamlit as st
 
-    st.subheader("Пакет документов новичка")
-    st.caption("Ответственный выбирает опубликованные документы для конкретного сотрудника и должности. Действия выполняются в режиме симуляции.")
+    st.text("Соберите документы для конкретного сотрудника и следите за прохождением его пакета.")
+    st.caption("В пакет входят опубликованные версии, назначенные сотруднику и его должности. Действия выполняются в режиме симуляции.")
     eligible = {}
     people = {}
     for version_id, version in workspace.get("versions", {}).items():
@@ -392,6 +437,7 @@ def render_onboarding(workspace):
         if not people:
             st.info("Сначала согласуйте версию и откройте ознакомление назначенным получателям.")
             return
+        st.subheader("Назначение пакета", anchor=False)
         person_key = st.selectbox("Получатель пакета", list(people),
                                  format_func=lambda key: f"{people[key]['name']} · {people[key]['role']}",
                                  key="onboarding:assign-person")
@@ -401,16 +447,20 @@ def render_onboarding(workspace):
                           and item.get("name") == person["name"] for item in version["recipients"])]
         selected = st.multiselect("Версии документов для пакета", choices,
                                   format_func=lambda value: f"{eligible[value]['title']} · {value}",
-                                  key=f"onboarding:versions:{person['id']}:{person['role']}")
+                                  key=f"onboarding:versions:{person['id']}:{person['role']}",
+                                  placeholder="Выберите опубликованные версии",
+                                  help="Доступны только версии, в которых сотрудник указан получателем с этой должностью.")
+        st.caption("Отметки об ознакомлении привязаны к точной версии каждого документа.")
         if st.button("Назначить пакет документов", disabled=not selected,
-                     key="onboarding:assign"):
+                     key="onboarding:assign", type="primary", icon=":material/assignment:"):
             try:
                 assign_onboarding(workspace, person, selected)
-                st.success("Пакет назначен. Прогресс доступен в режиме новичка ниже.")
+                st.success("Пакет назначен. Для просмотра выберите «Новичок (симуляция)».")
             except ValueError as exc:
                 st.error(str(exc))
         packages = workspace.get("onboarding", {})
         if packages:
+            st.subheader("Назначенные пакеты", anchor=False)
             st.dataframe([{
                 "Сотрудник": package["recipient"]["name"],
                 "Должность": package["recipient"]["role"],
@@ -427,11 +477,13 @@ def render_onboarding(workspace):
                              key="onboarding:reader-person")
     package = packages[person_id]
     progress = onboarding_progress(workspace, person_id)
+    st.subheader("Ваш прогресс", anchor=False)
+    st.caption("Прочитайте оригиналы и отметьте ознакомление по каждому документу.")
     st.progress(progress["percent"] / 100,
                 text=f"Ознакомлен: {progress['acknowledged']} из {progress['total']} документов")
     for version_id in package["version_ids"]:
         version = _version(workspace, version_id)
-        st.markdown(f"**{version['title']}**")
+        st.subheader(version["title"], anchor=False)
         try:
             _publication(workspace, version_id)
         except ValueError as exc:

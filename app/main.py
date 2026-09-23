@@ -23,6 +23,10 @@ from app.approvals import render_approvals  # noqa: E402
 from app.acknowledgements import render_acknowledgements, render_onboarding  # noqa: E402
 from app.ai_assistant import answer_question, enrich_analysis  # noqa: E402
 from app.source_explorer import render_sources  # noqa: E402
+from app.interactive_ui import (  # noqa: E402
+    RunProgress, install_transitions, motion_control, render_animated_chart,
+    render_findings_overview, upload_summary,
+)
 
 SUPPORTED_SUFFIXES = {".pdf", ".docx", ".xlsx", ".txt"}
 WARNING = (
@@ -42,6 +46,25 @@ TYPE_LABELS = {
     "reorganization": "Реорганизация",
 }
 SEVERITY_LABELS = {"high": "Высокая", "medium": "Средняя", "low": "Низкая"}
+# One colour per meaning across badges and charts: green appears, red disappears,
+# orange moves or changes, gray stays the same.
+STATUS_COLORS = {
+    "created": "green", "new": "green", "создано": "green",
+    "kept": "gray", "сохранено": "gray",
+    "reorganized": "orange", "moved": "orange", "changed": "orange",
+    "реорганизовано": "orange", "передано": "orange",
+    "removed": "red", "lost": "red", "не сопоставлено": "red",
+}
+STATUS_ICONS = {"green": ":material/add_circle:", "gray": ":material/check_circle:",
+                "orange": ":material/swap_horiz:", "red": ":material/remove_circle:"}
+SHORT_STATUS = {
+    "created": "Кандидат на создание", "removed": "Кандидат на упразднение",
+    "reorganized": "Признаки реорганизации", "kept": "Найдено до и после",
+    "moved": "Кандидат на передачу", "changed": "Кандидат на изменение",
+    "lost": "Пара не найдена", "new": "Новая извлечённая функция",
+}
+CHART_COLORS = {"green": "#5B8A6E", "gray": "#8C9BA3", "orange": "#B9854A", "red": "#B06565", "blue": "#4F7F86"}
+SEVERITY_COLORS = {"high": "red", "medium": "orange", "low": "gray"}
 DECISION_LABELS = {
     "confirmed": "подтверждено",
     "rejected": "отклонено",
@@ -183,6 +206,36 @@ def clear_run():
                             source_documents=None, chat_history=[])
 
 
+def uploads_changed():
+    """Invalidate only real uploader edits, not widget cleanup during navigation."""
+    clear_run()
+    st.session_state.input_signature = input_fingerprint(
+        st.session_state.get("before_uploads") or [],
+        st.session_state.get("after_uploads") or [],
+    )
+
+
+def navigate(page):
+    st.session_state.active_page = page
+
+
+def paginate_items(items, *, key, page_size=8):
+    """Keep long result lists readable without recomputing the analysis."""
+    if len(items) <= page_size:
+        return items
+    pages = math.ceil(len(items) / page_size)
+    if not 1 <= st.session_state.get(key, 1) <= pages:
+        st.session_state[key] = 1
+    page = st.selectbox(
+        "Страница", range(1, pages + 1), key=key, width=230,
+        format_func=lambda number: f"{number} из {pages}",
+        help="Переключение страницы сохраняет решения и не запускает анализ повторно.",
+    )
+    start = (page - 1) * page_size
+    st.caption(f"Записи {start + 1}–{min(start + page_size, len(items))} из {len(items)}")
+    return items[start:start + page_size]
+
+
 def log(step, status, message):
     st.session_state.journal.append({
         "time": datetime.now().astimezone().isoformat(timespec="seconds"),
@@ -192,13 +245,18 @@ def log(step, status, message):
     })
 
 
-def start_run(before, after, *, uploaded=False):
+def start_run(before, after, *, uploaded=False, on_event=None):
     clear_run()
     st.session_state.run_id = uuid4().hex
     try:
         if not before or not after:
             st.session_state.error = "Нужен хотя бы один файл с каждой стороны. Проверьте комплект и повторите запуск."
             return
+        def record_event(step, status, message):
+            log(step, status, message)
+            if on_event is not None:
+                on_event(step, status, message)
+
         def analyze(paths_before, paths_after, names_before, names_after):
             documents = {}
             labels = {}
@@ -209,8 +267,7 @@ def start_run(before, after, *, uploaded=False):
                     label = f"{'До' if side == 'before' else 'После'}/{i + 1}_{name}"
                     documents[side].append({"name": label, "content": path.read_bytes(), "text": read_text(path)})
                     labels[str(path)] = label
-            with st.spinner("Сравниваем документы и проверяем изменённые пункты..."):
-                result = run_analysis(paths_before, paths_after, log=log)
+            result = run_analysis(paths_before, paths_after, log=record_event)
             # Resolve source labels while temporary files still exist; keep originals in memory.
             for group in ("units", "function_map", "findings", "ambiguous_matches", "ai_insights"):
                 for item in result.get(group, []):
@@ -232,22 +289,35 @@ def start_run(before, after, *, uploaded=False):
         st.session_state.error = "Не удалось проанализировать комплект. Проверьте формат, наличие текста и общий размер файлов (до 50 МБ)."
 
 
+def status_badge(status):
+    """Badge whose colour means the same thing on every tab."""
+    status = status or "не указан"
+    color = STATUS_COLORS.get(status, "gray")
+    st.badge(STATUS_LABELS.get(status, status), color=color, icon=STATUS_ICONS.get(color))
+
+
+def evidence_label(evidence):
+    if not evidence:
+        return "Источники"
+    verified = sum(source.get("verified") is True for source in evidence)
+    return f"Источники · {len(evidence)} · проверено {verified}"
+
+
 def render_evidence(evidence):
-    with st.expander("Источники", expanded=False):
+    with st.expander(evidence_label(evidence), expanded=False, icon=":material/format_quote:"):
         if not evidence:
             st.caption("Источники не указаны.")
             return
         st.caption("Проверка цитаты не подтверждает истинность всего вывода.")
         for index, source in enumerate(evidence):
-            if index:
-                st.divider()
-            st.text(f"Документ: {source.get('doc') or 'не указан'}")
-            st.text(f"Пункт: {source.get('clause') or 'не указан'}")
-            st.text(f"Цитата: {source.get('quote') or 'не указана'}")
-            if source.get("verified") is True:
-                st.success("✓ Цитата проверена")
-            else:
-                st.warning("✗ Цитата не проверена")
+            with st.container(horizontal=True, vertical_alignment="center", gap="small"):
+                if source.get("verified") is True:
+                    st.badge("Цитата проверена", color="green", icon=":material/check:")
+                else:
+                    st.badge("Цитата не проверена", color="yellow", icon=":material/help:")
+                st.caption(f"{source.get('doc') or 'Документ не указан'} · п. {source.get('clause') or 'не указан'}")
+            with st.container(border=True):
+                st.text(source.get("quote") or "Цитата не указана")
 
 
 def similarity_label(value):
@@ -260,34 +330,87 @@ def similarity_label(value):
     return f"{number:.0%}"
 
 
+def view_switch(key):
+    """Cards for checking sources, a table for scanning the whole list."""
+    return st.segmented_control(
+        "Вид", ["Карточки", "Таблица"], default="Карточки", required=True,
+        key=key, label_visibility="collapsed",
+    ) or "Карточки"
+
+
+def verified_share(evidence):
+    evidence = evidence or []
+    return f"{sum(source.get('verified') is True for source in evidence)} из {len(evidence)}"
+
+
 def render_units(units):
     if not units:
         st.info("Подразделения отсутствуют.")
-    for unit in units:
+        return
+    run_id = st.session_state.run_id
+    if view_switch(f"{run_id}:units_view") == "Таблица":
+        st.dataframe(
+            [{"Подразделение": unit.get("name") or "", "Сокращение": unit.get("abbr") or "",
+              "Статус": STATUS_LABELS.get(unit.get("status"), unit.get("status") or ""),
+              "Проверено цитат": verified_share(unit.get("evidence"))} for unit in units],
+            hide_index=True, width="stretch",
+        )
+        return
+    for unit in paginate_items(units, key=f"{run_id}:units_page"):
         with st.container(border=True):
-            st.subheader(unit.get("name") or "Название не указано", anchor=False)
-            st.text(f"Сокращение: {unit.get('abbr') or 'не указано'}")
-            st.text(f"Статус: {STATUS_LABELS.get(unit.get('status'), unit.get('status') or 'не указан')}")
+            with st.container(horizontal=True, vertical_alignment="center"):
+                st.markdown(f"**{unit.get('name') or 'Название не указано'}**")
+                st.space("stretch")
+                status_badge(unit.get("status"))
+            st.caption(f"Сокращение: {unit.get('abbr') or 'не указано'}")
             render_evidence(unit.get("evidence"))
+
+
+def similarity_value(value):
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) and 0 <= number <= 1 else None
 
 
 def render_functions(function_map):
     if not function_map:
         st.info("Сопоставления функций отсутствуют.")
-    for item in function_map:
+        return
+    run_id = st.session_state.run_id
+    if view_switch(f"{run_id}:functions_view") == "Таблица":
+        st.dataframe(
+            [{"До: подразделение": item.get("before_unit") or "", "До: функция": item.get("before_function") or "",
+              "После: подразделение": item.get("after_unit") or "", "После: функция": item.get("after_function") or "",
+              "Статус": STATUS_LABELS.get(item.get("status"), item.get("status") or ""),
+              "Сходство": similarity_value(item.get("similarity"))} for item in function_map],
+            hide_index=True, width="stretch",
+            column_config={"Сходство": st.column_config.ProgressColumn(
+                "Сходство", format="percent", min_value=0, max_value=1,
+                help="Сходство формулировок, а не достоверность вывода")},
+        )
+        return
+    for item in paginate_items(function_map, key=f"{run_id}:functions_page"):
         with st.container(border=True):
-            before_column, after_column = st.columns(2)
+            with st.container(horizontal=True, vertical_alignment="center"):
+                status_badge(item.get("status"))
+                st.space("stretch")
+                st.caption(f"Сходство формулировок: {similarity_label(item.get('similarity'))}",
+                           help="Это не оценка достоверности вывода")
+            before_column, arrow_column, after_column = st.columns([10, 1, 10], vertical_alignment="center")
             for column, side, label in ((before_column, "before", "До"), (after_column, "after", "После")):
                 with column:
-                    st.caption(label)
-                    st.text(item.get(f"{side}_unit") or "Подразделение не указано")
+                    st.caption(f"{label} · {item.get(f'{side}_unit') or 'Подразделение не указано'}")
                     st.write(item.get(f"{side}_function") or "Функция не указана")
-            st.text(f"Статус: {STATUS_LABELS.get(item.get('status'), item.get('status') or 'не указан')} · Сходство: {similarity_label(item.get('similarity'))}")
+            arrow_column.markdown(":gray[:material/arrow_forward:]")
             render_evidence(item.get("evidence"))
 
 
 def set_decision(finding_id, decision):
     st.session_state.decisions[finding_id] = decision
+    st.toast(f"Решение сохранено: {DECISION_LABELS[decision]}",
+             icon=":material/check:" if decision == "confirmed" else ":material/close:")
 
 
 def render_findings(findings):
@@ -301,13 +424,15 @@ def render_findings(findings):
     with type_column:
         types = st.multiselect(
             "Тип находки", type_options, default=type_options,
-            format_func=lambda value: f"{TYPE_LABELS.get(value, value)} ({value})",
+            format_func=lambda value: TYPE_LABELS.get(value, value),
+            placeholder="Выберите типы", wrap=True,
             key=f"{run_id}:type_filter",
         )
     with severity_column:
         severities = st.multiselect(
             "Важность", severity_options, default=severity_options,
-            format_func=lambda value: f"{SEVERITY_LABELS.get(value, value)} ({value})",
+            format_func=lambda value: SEVERITY_LABELS.get(value, value),
+            placeholder="Выберите важность", wrap=True,
             key=f"{run_id}:severity_filter",
         )
     visible = [item for item in findings
@@ -316,29 +441,36 @@ def render_findings(findings):
     st.caption(f"Показано: {len(visible)} из {len(findings)}. Решение пользователя не меняет проверку цитат.")
     if not visible:
         st.info("По выбранным фильтрам находок нет.")
-    for finding in visible:
+    for finding in paginate_items(visible, key=f"{run_id}:findings_page", page_size=6):
         finding_id = finding["id"]
         with st.container(border=True):
-            st.subheader(finding.get("title") or "Без названия", anchor=False)
             kind, severity = finding.get("type", "не указан"), finding.get("severity", "не указана")
-            st.caption(f"{TYPE_LABELS.get(kind, kind)} · Важность: {SEVERITY_LABELS.get(severity, severity)}")
+            with st.container(horizontal=True, vertical_alignment="center", gap="small"):
+                st.badge("Важность: " + SEVERITY_LABELS.get(severity, severity),
+                         color=SEVERITY_COLORS.get(severity, "gray"), icon=":material/flag:")
+                st.badge(TYPE_LABELS.get(kind, kind), color="blue")
+            st.subheader(finding.get("title") or "Без названия", anchor=False)
             st.write(finding.get("description") or "Описание отсутствует.")
-            st.text("Подразделения: " + (", ".join(finding.get("units") or []) or "не указаны"))
+            st.caption("Подразделения: " + (", ".join(finding.get("units") or []) or "не указаны"))
             render_evidence(finding.get("evidence"))
             decision = st.session_state.decisions.get(finding_id)
-            st.text(f"Решение: {DECISION_LABELS.get(decision, 'не принято')}")
-            confirm, reject = st.columns(2)
-            confirm.button("Подтвердить", key=f"{run_id}:{finding_id}:confirm",
-                           on_click=set_decision, args=(finding_id, "confirmed"), width="stretch")
-            reject.button("Отклонить", key=f"{run_id}:{finding_id}:reject",
-                          on_click=set_decision, args=(finding_id, "rejected"), width="stretch")
+            with st.container(horizontal=True, vertical_alignment="center"):
+                st.button("Подтвердить", key=f"{run_id}:{finding_id}:confirm", icon=":material/check:",
+                          on_click=set_decision, args=(finding_id, "confirmed"),
+                          type="primary" if decision == "confirmed" else "secondary")
+                st.button("Отклонить", key=f"{run_id}:{finding_id}:reject", icon=":material/close:",
+                          on_click=set_decision, args=(finding_id, "rejected"),
+                          type="primary" if decision == "rejected" else "secondary")
+                st.caption(f"Решение: {DECISION_LABELS.get(decision, 'не принято')}")
 
 
 def render_result(result):
     tabs = st.tabs(["Подразделения", "Сопоставление функций", "Находки", "Заключение", "Журнал агента", "Структура и пункты"])
     with tabs[0]:
+        st.caption("Посмотрите, какие подразделения найдены в документах, и раскройте источники для проверки.")
         render_units(result.get("units") or [])
     with tabs[1]:
+        st.caption("Слева — функция до изменений, справа — её возможное соответствие после.")
         render_functions(result.get("function_map") or [])
         ambiguous = result.get("ambiguous_matches") or []
         if ambiguous:
@@ -350,9 +482,11 @@ def render_result(result):
                         st.text(f"Кандидат: {candidate.get('unit', '')} · {candidate.get('function', '')}")
                     render_evidence(item.get("evidence"))
     with tabs[2]:
+        st.caption("Отберите находки по типу и важности, проверьте цитаты и отметьте своё решение.")
         render_findings(result.get("findings") or [])
     with tabs[3]:
-        st.write(result.get("conclusion") or "Заключение отсутствует.")
+        with st.container(border=True):
+            st.write(result.get("conclusion") or "Заключение отсутствует.")
         st.warning("Выводы рекомендательные. Локальные правила могут пропускать функции и неверно сопоставлять переформулировки.")
         if result.get("ai_status"):
             st.info(result["ai_status"])
@@ -368,7 +502,7 @@ def render_result(result):
         st.caption("Журнал фактически выполненных этапов; вызов OpenAI отмечается отдельно.")
         if st.session_state.journal:
             st.dataframe(st.session_state.journal, hide_index=True, width="stretch",
-                         column_config={"time": "Время", "step": "step", "status": "status", "message": "message"})
+                         column_config={"time": "Время", "step": "Этап", "status": "Статус", "message": "Сообщение"})
         else:
             st.info("Журнал пуст.")
     with tabs[5]:
@@ -376,7 +510,7 @@ def render_result(result):
 
 
 def render_impact(result):
-    st.header("Кого затронули изменения")
+    st.subheader("Кого затронули изменения", anchor=False)
     st.caption("Выберите изменения, проверьте источники и назначьте получателей. Отправки сообщений нет.")
     cards = impact_cards(result)
     if not cards:
@@ -386,9 +520,12 @@ def render_impact(result):
     run_id = st.session_state.run_id
     selected = st.multiselect("Изменения для проверки", list(by_id),
                               format_func=lambda key: f"{by_id[key]['unit']} · {STATUS_LABELS.get(by_id[key]['status'], by_id[key]['status'])} · {by_id[key]['after'][:65]}",
-                              key=f"{run_id}:impact_selection")
-    people_text = st.text_area("Получатели: имя | должность или подразделение (одна строка на человека)",
-                              value="\n".join(f"{p['name']} | {p['role']}" for p in DEMO_PEOPLE), key=f"{run_id}:people")
+                              key=f"{run_id}:impact_selection", placeholder="Выберите изменения", wrap=True)
+    with st.expander("Список получателей · проверьте перед назначением", expanded=bool(selected)):
+        st.caption("По умолчанию указаны вымышленные участники. Замените их своим списком.")
+        people_text = st.text_area("Получатели: имя | должность или подразделение (одна строка на человека)",
+                                  value="\n".join(f"{p['name']} | {p['role']}" for p in DEMO_PEOPLE), key=f"{run_id}:people",
+                                  help="Например: Имя сотрудника | Отдел контроля")
     recipients, invalid = [], False
     for line in people_text.splitlines():
         if not line.strip():
@@ -413,13 +550,18 @@ def render_impact(result):
             card["recipient_ids"] = st.multiselect(
                 "Кому относится это изменение", [p["id"] for p in recipients],
                 format_func=lambda value: next(p["name"] + " · " + p["role"] for p in recipients if p["id"] == value),
-                key=f"{run_id}:targets:{key}")
+                key=f"{run_id}:targets:{key}", placeholder="Выберите получателей", wrap=True)
         selected_cards.append(card)
-    title = st.text_input("Название пакета", value="Изменения обязанностей", key=f"{run_id}:version_title")
-    revision = st.text_input("Редакция пакета", value="1", key=f"{run_id}:revision")
-    reviewer = st.text_input("Ответственный за проверку", key=f"{run_id}:reviewed_by")
+    st.subheader("Параметры версии", anchor=False)
+    title_col, revision_col = st.columns([3, 1])
+    title = title_col.text_input("Название пакета", value="Изменения обязанностей", key=f"{run_id}:version_title")
+    revision = revision_col.text_input("Редакция пакета", value="1", key=f"{run_id}:revision")
+    reviewer = st.text_input("Ответственный за проверку", key=f"{run_id}:reviewed_by", placeholder="Имя ответственного")
     checked = st.checkbox("Я проверил выбранные изменения, цитаты и получателей", key=f"{run_id}:reviewed")
-    if st.button("Создать версию для согласования", disabled=not checked or not selected_cards, key=f"{run_id}:freeze"):
+    if not selected_cards:
+        st.caption("Сначала выберите хотя бы одно изменение в поле выше.")
+    if st.button("Создать версию для согласования", disabled=not checked or not selected_cards, key=f"{run_id}:freeze",
+                 type="primary", icon=":material/assignment_turned_in:", wrap=True):
         try:
             assigned = {rid for c in selected_cards for rid in c["recipient_ids"]}
             version_id = make_version(st.session_state.workspace, title=title, revision=revision, reviewed_by=reviewer,
@@ -439,7 +581,11 @@ def render_workflow_page(page):
         return
     versions = workspace["versions"]
     if not versions:
-        st.info("Сначала выполните анализ, проверьте изменения и создайте версию для согласования.")
+        with st.container(border=True):
+            st.subheader("Пока нет версий для работы", anchor=False)
+            st.info("Сначала выполните анализ, проверьте изменения и создайте версию для согласования.")
+            st.button("Перейти к анализу", icon=":material/compare_arrows:", type="primary",
+                      on_click=navigate, args=("Анализ изменений",), key=f"empty:{page}:analysis")
         return
     choices = list(versions)
     active = st.session_state.get("active_version", choices[-1])
@@ -483,81 +629,182 @@ def render_chat_page():
         st.rerun()
 
 
-def main():
-    st.set_page_config(page_title="Анализ организационной структуры", page_icon="↔", layout="wide")
-    st.markdown("""
-        <style>
-        h1 { font-family: Georgia, serif !important; }
-        </style>
-    """, unsafe_allow_html=True)
-    st.title("Анализ организационной структуры")
-    st.warning(WARNING)
-    st.caption("Анализ → проверка изменений → согласование → ознакомление. Работает без ключей.")
-    st.sidebar.markdown("## Документы и изменения")
-    page = st.sidebar.radio("Раздел", ["Анализ изменений", "ИИ-чат", "Согласование", "Ознакомление", "Документы новичка"])
-    st.sidebar.info("Прототип: выбор участника — симуляция. Нет проверки личности, ЭЦП и корпоративных интеграций. Данные хранятся только в текущей сессии браузера.")
-    if "workspace" not in st.session_state:
-        st.session_state.workspace = new_workspace()
-    if page == "ИИ-чат":
-        render_chat_page()
-        return
-    if page != "Анализ изменений":
-        render_workflow_page(page)
-        return
+def render_sidebar():
+    with st.sidebar:
+        st.markdown("### :material/account_tree: Оргструктура")
+        st.caption("Документы и изменения")
+        page = st.radio(
+            "Раздел", ["Анализ изменений", "ИИ-чат", "Согласование", "Ознакомление", "Документы новичка"],
+            key="active_page", label_visibility="collapsed",
+        )
+        st.divider()
+        st.markdown("**Как проходит работа**")
+        st.caption("1. Сравните документы\n\n2. Проверьте и согласуйте изменения\n\n3. Передайте документы на ознакомление")
+        versions = len(st.session_state.workspace["versions"])
+        st.caption(f"Версий в этой сессии: {versions}")
+        with st.expander("О прототипе", icon=":material/info:"):
+            st.caption("Выбор участника — симуляция. Нет проверки личности, ЭЦП и корпоративных интеграций.")
+            st.caption("Данные хранятся только в текущей сессии браузера. Полное обновление страницы может завершить сессию.")
+        with_ai = config.openai_available() and st.session_state.get("ai_enabled", True)
+        st.badge("Локально + OpenAI" if with_ai else "Локальный анализ",
+                 icon=":material/computer:", color="gray")
+        motion_control()
+    return page
 
+
+def count_by(items, field, labels, colors):
+    counts = {}
+    for item in items:
+        key = item.get(field) or "не указан"
+        counts[key] = counts.get(key, 0) + 1
+    return [{"Категория": labels.get(key, key), "Количество": number,
+             "color": CHART_COLORS[colors.get(key, "gray")]} for key, number in counts.items()]
+
+
+def render_chart(rows, title, bars):
+    render_animated_chart(rows, title, bars)
+
+
+def render_overview(result):
+    units, functions = result.get("units") or [], result.get("function_map") or []
+    findings = result.get("findings") or []
+    high = sum(item.get("severity") == "high" for item in findings)
+    columns = iter(st.columns(4))
+    with next(columns):
+        st.metric("Подразделения", len(units), border=True, icon=":material/account_tree:",
+                  delta=f"только после: {sum(u.get('status') == 'created' for u in units)}",
+                  delta_color="off", delta_arrow="off")
+    with next(columns):
+        st.metric("Сопоставления функций", len(functions), border=True, icon=":material/compare_arrows:",
+                  delta=f"без пары: {sum(f.get('status') == 'lost' for f in functions)}",
+                  delta_color="off", delta_arrow="off")
+    with next(columns):
+        st.metric("Находки", len(findings), border=True, icon=":material/flag:",
+                  delta=f"высокой важности: {high}",
+                  delta_color="off", delta_arrow="off")
+    with next(columns):
+        st.metric("Решения приняты", f"{len(st.session_state.decisions)} из {len(findings)}",
+                  border=True, icon=":material/task_alt:", delta="по находкам", delta_color="off", delta_arrow="off")
+    charts = [(count_by(units, "status", SHORT_STATUS, STATUS_COLORS), "Подразделения по статусу"),
+              (count_by(functions, "status", SHORT_STATUS, STATUS_COLORS), "Функции по статусу")]
+    bars = max(len(rows) for rows, _ in charts) or 1
+    for column, (rows, title) in zip(st.columns(2), charts):
+        with column:
+            render_chart(rows, title, bars)
+    render_findings_overview(findings, st.session_state.decisions)
+
+
+def render_analysis_page():
     if "result" not in st.session_state:
         clear_run()
-    st.caption("PDF, DOCX, XLSX или TXT · до 50 МБ на весь загружаемый комплект · PDF должен содержать текст.")
-    before_column, after_column = st.columns(2)
-    with before_column:
-        with st.container(border=True):
-            st.subheader("До", anchor=False)
-            before = st.file_uploader("До", type=["pdf", "docx", "xlsx", "txt"], accept_multiple_files=True,
-                                      key="before_uploads", label_visibility="collapsed")
-    with after_column:
-        with st.container(border=True):
-            st.subheader("После", anchor=False)
-            after = st.file_uploader("После", type=["pdf", "docx", "xlsx", "txt"], accept_multiple_files=True,
-                                     key="after_uploads", label_visibility="collapsed")
+    has_result = st.session_state.result is not None
+    st.header("1. Выберите документы", anchor=False)
+    with st.expander("Комплекты до и после изменений", expanded=not has_result, icon=":material/folder_open:"):
+        st.caption("PDF с текстом, DOCX, XLSX или TXT. Общий размер загруженных файлов — до 50 МБ.")
+        before_column, after_column = st.columns(2, gap="medium")
+        with before_column:
+            with st.container(border=True, key="upload_before"):
+                st.subheader("До", anchor=False)
+                st.caption("Действующая или предыдущая редакция")
+                before = st.file_uploader(
+                    "До", type=["pdf", "docx", "xlsx", "txt"], accept_multiple_files=True,
+                    key="before_uploads", label_visibility="collapsed", on_change=uploads_changed,
+                    max_upload_size=50,
+                )
+                upload_summary(before)
+        with after_column:
+            with st.container(border=True, key="upload_after"):
+                st.subheader("После", anchor=False)
+                st.caption("Новая редакция для сравнения")
+                after = st.file_uploader(
+                    "После", type=["pdf", "docx", "xlsx", "txt"], accept_multiple_files=True,
+                    key="after_uploads", label_visibility="collapsed", on_change=uploads_changed,
+                    max_upload_size=50,
+                )
+                upload_summary(after)
+        if "input_signature" not in st.session_state:
+            st.session_state.input_signature = input_fingerprint(before, after)
+        available = config.openai_available()
+        st.toggle("Улучшить анализ с OpenAI", value=available,
+                  disabled=not available, key="ai_enabled",
+                  help="Изменённые пункты передаются в OpenAI. Без ключа анализ выполняется локально.")
+        with st.container(horizontal=True, vertical_alignment="center"):
+            compare = st.button("Сравнить", disabled=not (before and after), type="primary", icon=":material/compare_arrows:")
+            if before and after:
+                st.caption("Комплекты готовы к сравнению")
+            else:
+                st.caption("Чтобы начать, добавьте хотя бы один файл в каждый комплект.")
 
-    signature = input_fingerprint(before, after)
-    if signature != st.session_state.get("input_signature"):
-        clear_run()
-        st.session_state.input_signature = signature
-
-    available = config.openai_available()
-    st.toggle("Улучшить анализ с OpenAI", value=available,
-              disabled=not available, key="ai_enabled",
-              help="Изменённые пункты передаются в OpenAI. Без ключа анализ выполняется локально.")
-
-    compare_column, demo_column = st.columns(2)
-    compare = compare_column.button("Сравнить", disabled=not (before and after), type="primary", width="stretch")
-    demo = demo_column.button("Демо на тестовом комплекте", width="stretch")
-    synthetic = st.button("Синтетический пример: подключения и кабельные работы", width="stretch")
-    if compare:
-        start_run(before, after, uploaded=True)
-    elif demo:
-        start_run(*sample_paths())
-    elif synthetic:
-        start_run(*[sorted((ROOT / "data" / "control" / side).glob("*.txt")) for side in ("before", "after")])
+    with st.expander("Попробовать без загрузки файлов", expanded=not has_result, icon=":material/play_circle:"):
+        st.caption("Тестовый комплект показывает сравнение двух редакций. Синтетический пример помогает пройти весь процесс согласования.")
+        with st.container(horizontal=True):
+            demo = st.button("Демо на тестовом комплекте", icon=":material/description:", wrap=True)
+            synthetic = st.button("Синтетический пример: подключения и кабельные работы", icon=":material/science:", wrap=True)
+    if compare or demo or synthetic:
+        progress = RunProgress()
+        if compare:
+            start_run(before, after, uploaded=True, on_event=progress)
+        elif demo:
+            start_run(*sample_paths(), on_event=progress)
+        else:
+            start_run(*[sorted((ROOT / "data" / "control" / side).glob("*.txt")) for side in ("before", "after")],
+                      on_event=progress)
+        progress.finish(success=st.session_state.result is not None)
 
     if st.session_state.error:
-        st.error(st.session_state.error)
-    if st.session_state.result is not None:
-        st.divider()
-        if st.session_state.result.get("analysis_mode") == "local" and not st.session_state.result.get("ai_status"):
-            st.info("Локальный анализ правилами и TF-IDF: реальные тексты читаются, но извлечение может быть неполным. LLM не используется.")
-        st.caption("Источники относятся к обработанному комплекту. Контрольный пример синтетический и не описывает обязанности сотрудников Казахтелекома.")
-        render_result(st.session_state.result)
-        with st.expander("Оригиналы обработанных документов"):
-            for side, docs in (st.session_state.source_documents or {}).items():
-                for index, doc in enumerate(docs):
-                    st.download_button(doc["name"], doc["content"], file_name=doc["name"].split("/")[-1],
-                                       key=f"source:{st.session_state.run_id}:{side}:{index}")
-        st.divider()
-        render_impact(st.session_state.result)
-    elif not st.session_state.error:
-        st.info("Добавьте файлы с обеих сторон или откройте демо на тестовом комплекте.")
+        st.error(st.session_state.error, icon=":material/error:")
+    if st.session_state.result is None:
+        return
+
+    result = st.session_state.result
+    st.divider()
+    st.header("2. Проверьте результат", anchor=False)
+    st.caption("Это результат последнего запуска. Начните с находок, затем проверьте функции и источники.")
+    render_overview(result)
+    if result.get("analysis_mode") == "local":
+        st.caption("Локальное сравнение реальных текстов. Извлечение может быть неполным — проверьте важные выводы по документам.")
+    with st.expander("Какие документы сравнивались", icon=":material/folder:"):
+        for side, docs in (st.session_state.source_documents or {}).items():
+            st.markdown("**До изменений**" if side == "before" else "**После изменений**")
+            for index, doc in enumerate(docs):
+                st.download_button(doc["name"], doc["content"], file_name=doc["name"].split("/")[-1],
+                                   key=f"source:{st.session_state.run_id}:{side}:{index}", icon=":material/download:")
+        st.caption("Источники относятся к этому комплекту. Синтетический пример не описывает обязанности реальных сотрудников.")
+    render_result(result)
+    st.divider()
+    st.header("3. Подготовьте согласование", anchor=False)
+    st.caption("После проверки выберите изменения и получателей. Созданная версия появится в разделе «Согласование».")
+    with st.expander("Выбрать изменения и создать версию", icon=":material/assignment:"):
+        render_impact(result)
+    if st.session_state.get("active_version"):
+        st.button("Открыть согласование", icon=":material/arrow_forward:",
+                  on_click=navigate, args=("Согласование",), key="open_approvals")
+
+
+def main():
+    st.set_page_config(page_title="Анализ организационной структуры", page_icon=":material/account_tree:", layout="wide")
+    if "workspace" not in st.session_state:
+        st.session_state.workspace = new_workspace()
+    page = render_sidebar()
+    install_transitions()
+    descriptions = {
+        "Анализ изменений": "Сравните две редакции документов, проверьте изменения и подготовьте их к согласованию.",
+        "ИИ-чат": "Задайте вопрос по сравниваемым документам и проверьте источники ответа.",
+        "Согласование": "Выберите версию документа и пройдите маршрут согласования по ролям.",
+        "Ознакомление": "Назначьте согласованные документы сотрудникам и отслеживайте ознакомление.",
+        "Документы новичка": "Соберите документы для нового сотрудника и проверьте, с чем он ознакомился.",
+    }
+    with st.container(horizontal_alignment="center"):
+        with st.container(width=1160):
+            st.title("Анализ организационной структуры" if page == "Анализ изменений" else page, anchor=False)
+            st.markdown(descriptions[page])
+            st.caption(f":material/info: {WARNING}")
+            if page == "Анализ изменений":
+                render_analysis_page()
+            elif page == "ИИ-чат":
+                render_chat_page()
+            else:
+                render_workflow_page(page)
 
 
 if __name__ == "__main__":

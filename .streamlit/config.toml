@@ -1,0 +1,43 @@
+# Calm, local-only theme. Built-in fonts need no external font service.
+[theme]
+base = "light"
+primaryColor = "#356B70"
+backgroundColor = "#F5F7F8"
+secondaryBackgroundColor = "#E9EEF0"
+textColor = "#253744"
+borderColor = "#CCD7DD"
+grayColor = "#5E717C"
+grayTextColor = "#526571"
+linkColor = "#356B70"
+font = "sans-serif"
+headingFont = "sans-serif"
+baseFontSize = 16
+headingFontSizes = ["2rem", "1.5rem", "1.15rem", "1rem", "1rem", "1rem"]
+headingFontWeights = [650, 600, 600, 600, 600, 600]
+baseRadius = "8px"
+buttonRadius = "8px"
+showWidgetBorder = true
+showSidebarBorder = true
+dataframeHeaderBackgroundColor = "#E9EEF0"
+dataframeBorderColor = "#CCD7DD"
+blueColor = "#356B70"
+blueTextColor = "#2C5C61"
+blueBackgroundColor = "#E5EFF0"
+greenColor = "#47735D"
+greenTextColor = "#345B48"
+greenBackgroundColor = "#E8F0EA"
+yellowColor = "#A37C33"
+yellowTextColor = "#73571F"
+yellowBackgroundColor = "#F4EFE3"
+redColor = "#A85252"
+redTextColor = "#864141"
+redBackgroundColor = "#F5EAEA"
+
+[theme.sidebar]
+backgroundColor = "#E9EEF0"
+secondaryBackgroundColor = "#F5F7F8"
+textColor = "#253744"
+borderColor = "#CCD7DD"
+
+[browser]
+gatherUsageStats = false

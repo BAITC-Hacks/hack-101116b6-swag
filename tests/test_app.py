@@ -73,6 +73,15 @@ def _filter(app, label):
     return next(widget for widget in app.multiselect if widget.label == label)
 
 
+def _visible_text(app):
+    """Assert product copy independently of its typographic Streamlit element."""
+    return "\n".join(
+        str(element.value)
+        for kind in ("text", "markdown", "caption", "info", "success", "warning", "subheader", "header")
+        for element in getattr(app, kind)
+    )
+
+
 def _start_demo(app):
     _button(app, "Демо на тестовом комплекте").click().run()
     assert not app.exception
@@ -207,7 +216,7 @@ def test_demo_filters_decisions_and_fresh_run_are_stateful(app_runtime):
     _filter(app, "Важность").set_value([finding["severity"]]).run()
     assert not app.exception
     assert app.button(key=f"{run_id}:{finding_id}:reject")
-    assert any("Решение: подтверждено" in element.value for element in app.text)
+    assert "Решение: подтверждено" in _visible_text(app)
     app.button(key=f"{run_id}:{finding_id}:reject").click().run()
     assert not app.exception
     assert app.session_state["decisions"][finding_id] == "rejected"
@@ -217,7 +226,7 @@ def test_demo_filters_decisions_and_fresh_run_are_stateful(app_runtime):
     assert not any(button.label in ("Подтвердить", "Отклонить") for button in app.button)
     _filter(app, "Важность").set_value([finding["severity"]]).run()
     assert app.session_state["decisions"][finding_id] == "rejected"
-    assert any("Решение: отклонено" in element.value for element in app.text)
+    assert "Решение: отклонено" in _visible_text(app)
     assert len(calls) == 1
     assert app.session_state["run_id"] == run_id
     assert app.session_state["result"] == snapshot
@@ -229,6 +238,140 @@ def test_demo_filters_decisions_and_fresh_run_are_stateful(app_runtime):
     assert app.session_state["run_id"] != run_id
     assert app.session_state["decisions"] == {}
     assert len(app.session_state["journal"]) == 7
+
+
+@pytest.mark.parametrize("source", ["demo", "uploads"])
+def test_sidebar_round_trip_preserves_result_decisions_and_documents(app_runtime, source):
+    app, calls = app_runtime
+    if source == "demo":
+        _start_demo(app)
+    else:
+        app.file_uploader(key="before_uploads").set_value([
+            ("before.txt", b"1.1. Before regulation.", "text/plain")
+        ]).run()
+        app.file_uploader(key="after_uploads").set_value([
+            ("after.txt", b"1.1. After regulation.", "text/plain")
+        ]).run()
+        _button(app, "Сравнить").click().run()
+        assert not app.exception
+
+    run_id = app.session_state["run_id"]
+    finding_id = app.session_state["result"]["findings"][0]["id"]
+    app.button(key=f"{run_id}:{finding_id}:confirm").click().run()
+    assert not app.exception
+    state = {
+        key: deepcopy(app.session_state[key])
+        for key in ("result", "decisions", "journal", "run_id", "source_documents", "input_signature", "chat_history")
+    }
+
+    for page in ("ИИ-чат", "Согласование", "Ознакомление", "Документы новичка", "Анализ изменений"):
+        next(widget for widget in app.radio if widget.label == "Раздел").set_value(page).run()
+        assert not app.exception
+        for key, value in state.items():
+            assert app.session_state[key] == value, f"Navigation to {page} reset {key}"
+        assert len(calls) == 1
+
+    assert len(app.tabs) == 6
+    assert "Решение: подтверждено" in _visible_text(app)
+    if source == "uploads":
+        # Hidden upload widgets may reset, but returning must not erase the
+        # completed analysis. The next intentional change starts a fresh input.
+        app.file_uploader(key="before_uploads").set_value([
+            ("new-before.txt", b"1.1. Replacement regulation.", "text/plain")
+        ]).run()
+        assert not app.exception
+        assert app.session_state["result"] is None
+        assert app.session_state["decisions"] == {}
+        assert len(calls) == 1
+        app.file_uploader(key="after_uploads").set_value([
+            ("new-after.txt", b"1.1. New comparison.", "text/plain")
+        ]).run()
+        _button(app, "Сравнить").click().run()
+        assert not app.exception
+        assert app.session_state["result"]
+        assert app.session_state["run_id"] != run_id
+        assert len(calls) == 2
+
+
+def test_pagination_preserves_decisions_and_bounds_pages_after_filtering(app_module, monkeypatch):
+    calls = []
+    template = app_module.run_stub([], [])
+
+    def many_results(before, after, log=None):
+        calls.append(True)
+        result = app_module.run_stub(before, after, log=log)
+        result["units"] = [
+            {**deepcopy(template["units"][0]), "name": f"Учебное подразделение [unit-{index:03d}]"}
+            for index in range(17)
+        ]
+        result["function_map"] = [
+            {**deepcopy(template["function_map"][0]),
+             "before_function": f"Учебная функция [function-{index:03d}]"}
+            for index in range(17)
+        ]
+        result["findings"] = [
+            {**deepcopy(template["findings"][index % 4]),
+             "id": f"page-finding-{index}", "title": f"Учебная находка {index + 1}"}
+            for index in range(19)
+        ]
+        return result
+
+    monkeypatch.setattr(app_module, "run_analysis", many_results)
+    app = AppTest.from_function(_render_app, default_timeout=30).run()
+    _start_demo(app)
+    run_id = app.session_state["run_id"]
+    snapshot = deepcopy(app.session_state["result"])
+    page_key = f"{run_id}:findings_page"
+
+    for tab_index, section, token in ((0, "units", "unit"), (1, "functions", "function")):
+        assert app.selectbox(key=f"{run_id}:{section}_page").value == 1
+        assert f"[{token}-000]" in _visible_text(app.tabs[tab_index])
+        assert f"[{token}-008]" not in _visible_text(app.tabs[tab_index])
+        app.selectbox(key=f"{run_id}:{section}_page").set_value(3).run()
+        assert not app.exception
+        assert f"[{token}-016]" in _visible_text(app.tabs[tab_index])
+        assert f"[{token}-000]" not in _visible_text(app.tabs[tab_index])
+
+    def visible_ids():
+        return {button.key.split(":")[-2] for button in app.button if button.label == "Подтвердить"}
+
+    assert app.selectbox(key=page_key).value == 1
+    assert visible_ids() == {f"page-finding-{index}" for index in range(6)}
+    app.button(key=f"{run_id}:page-finding-0:confirm").click().run()
+    app.selectbox(key=page_key).set_value(2).run()
+    assert not app.exception
+    assert visible_ids() == {f"page-finding-{index}" for index in range(6, 12)}
+    app.button(key=f"{run_id}:page-finding-6:reject").click().run()
+    app.selectbox(key=page_key).set_value(1).run()
+    assert not app.exception
+    assert "Решение: подтверждено" in _visible_text(app)
+    assert app.session_state["decisions"] == {
+        "page-finding-0": "confirmed", "page-finding-6": "rejected"
+    }
+
+    # Reducing the result set from four pages to two must not leave an empty
+    # phantom fourth page or discard decisions for temporarily hidden cards.
+    app.selectbox(key=page_key).set_value(4).run()
+    _filter(app, "Тип находки").set_value(["loss", "conflict"]).run()
+    assert not app.exception
+    assert 1 <= app.selectbox(key=page_key).value <= 2
+    filtered_ids = {item["id"] for item in snapshot["findings"] if item["type"] in {"loss", "conflict"}}
+    assert visible_ids() and visible_ids() <= filtered_ids
+    assert len(visible_ids()) <= 6
+    _filter(app, "Важность").set_value([]).run()
+    assert not app.exception
+    assert visible_ids() == set()
+    assert app.session_state["result"] == snapshot
+    assert app.session_state["decisions"]["page-finding-6"] == "rejected"
+    assert len(calls) == 1
+
+    _start_demo(app)
+    new_run_id = app.session_state["run_id"]
+    assert new_run_id != run_id
+    assert app.session_state["decisions"] == {}
+    assert app.selectbox(key=f"{new_run_id}:findings_page").value == 1
+    assert len(visible_ids()) == 6
+    assert len(calls) == 2
 
 
 def test_changed_upload_content_hides_old_result_and_compare_uses_live_files(app_module, monkeypatch):
@@ -320,6 +463,6 @@ def test_empty_results_missing_sources_and_unknown_statuses_render(app_module, m
         }
     else:
         assert any(item.value == "Источники не указаны." for item in app.caption)
-        assert any("неизвестный статус" in item.value for item in app.text)
+        assert "неизвестный статус" in _visible_text(app)
         assert "unrecognized" in _filter(app, "Тип находки").value
         assert "unrecognized" in _filter(app, "Важность").value

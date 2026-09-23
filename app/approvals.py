@@ -118,28 +118,32 @@ def record_decision(
 def _render_version(version: dict, key_prefix: str) -> None:
     st.subheader(version.get("title") or "Пакет документов", anchor=False)
     st.text(f"Версия: {version['id']}")
-    st.caption(f"Создана: {version.get('created_at', 'не указано')}")
-    st.text(f"Изменения проверил ответственный: {version['reviewed_by']}")
-    with st.expander("Документы и изменения этой версии", expanded=True):
-        for index, document in enumerate(version.get("documents", [])):
-            name = document.get("name") or f"Документ {index + 1}"
-            filename = name.replace("\\", "/").rsplit("/", 1)[-1] or "document"
-            st.download_button(
-                f"Скачать оригинал: {name}",
-                data=document["content"],
-                file_name=filename,
-                mime=mimetypes.guess_type(filename)[0] or "application/octet-stream",
-                key=f"{key_prefix}:document:{index}",
-            )
-            if document.get("text"):
-                with st.expander(f"Текст: {name}"):
-                    st.text(document["text"])
+    st.caption(
+        f"Создана: {version.get('created_at', 'не указано')} · "
+        f"Изменения проверил ответственный: {version['reviewed_by']}"
+    )
+    st.caption("Проверьте оригиналы и изменения перед записью решения.")
+    for index, document in enumerate(version.get("documents", [])):
+        name = document.get("name") or f"Документ {index + 1}"
+        filename = name.replace("\\", "/").rsplit("/", 1)[-1] or "document"
+        st.download_button(
+            f"Скачать оригинал: {name}",
+            data=document["content"],
+            file_name=filename,
+            mime=mimetypes.guess_type(filename)[0] or "application/octet-stream",
+            key=f"{key_prefix}:document:{index}",
+            icon=":material/download:",
+        )
+        if document.get("text"):
+            with st.expander(f"Текст: {name}"):
+                st.text(document["text"])
+    with st.expander("Документы и изменения этой версии"):
         changes = version.get("changes", [])
         if not changes:
-            st.info("В этой версии нет карточек изменений.")
+            st.caption("В этой версии нет карточек изменений.")
         for change in changes:
             with st.container(border=True):
-                st.text(change.get("unit") or "Подразделение / должность не указаны")
+                st.subheader(change.get("unit") or "Подразделение / должность не указаны", anchor=False)
                 before, after = st.columns(2)
                 with before:
                     st.caption("До")
@@ -151,13 +155,16 @@ def _render_version(version: dict, key_prefix: str) -> None:
                 if not sources:
                     st.warning("Источники изменения не указаны.")
                 for source in sources:
-                    st.caption(
-                        f"Источник: {source.get('doc') or 'не указан'} · "
+                    with st.expander(
+                        f"{source.get('doc') or 'Источник не указан'} · "
                         f"пункт {source.get('clause') or 'не указан'}"
-                    )
-                    st.text(source.get("quote") or "Цитата не указана")
-                    if source.get("verified") is not True:
-                        st.warning("Цитата не проверена автоматически.")
+                    ):
+                        st.text(source.get("quote") or "Цитата не указана")
+                        if source.get("verified") is not True:
+                            st.badge("Цитата не проверена автоматически.", color="orange")
+                        else:
+                            st.badge("Цитата проверена", color="primary", icon=":material/check:")
+                        st.caption("Проверка цитаты не подтверждает весь вывод.")
 
 
 def render_approvals(workspace: dict, version_id: str) -> None:
@@ -168,6 +175,7 @@ def render_approvals(workspace: dict, version_id: str) -> None:
         st.warning(str(error))
         return
     prefix = f"approval:{version_id}"
+    st.text("Проверьте сохранённую версию документов и соберите решения участников маршрута.")
     st.caption(
         "Локальный прототип: выбор участника имитирует вход руководителя. "
         "Нет проверки личности, внешних уведомлений и юридически значимой ЭЦП."
@@ -175,13 +183,18 @@ def render_approvals(workspace: dict, version_id: str) -> None:
     _render_version(version, prefix)
     status = approval_status(workspace, version_id)
     st.subheader("Маршрут согласования", anchor=False)
-    st.text(STATUS_LABELS[status])
+    st.badge(
+        STATUS_LABELS[status],
+        color={"not_started": "gray", "pending": "primary", "returned": "orange", "approved": "primary"}[status],
+        icon=":material/check_circle:" if status == "approved" else None,
+    )
 
     if status == "not_started":
         mode = st.radio(
             "Участники маршрута",
             ["Вымышленные руководители", "Список имён"],
             key=f"{prefix}:reviewer_mode",
+            horizontal=True,
         )
         if mode == "Вымышленные руководители":
             reviewers = st.multiselect(
@@ -189,15 +202,19 @@ def render_approvals(workspace: dict, version_id: str) -> None:
                 DEMO_REVIEWERS,
                 default=DEMO_REVIEWERS,
                 key=f"{prefix}:reviewers",
+                placeholder="Выберите участников",
             )
         else:
             names = st.text_area(
                 "Имена участников — по одному в строке",
                 key=f"{prefix}:reviewer_names",
+                placeholder="Алия\nБорис",
+                help="Участники должны иметь разные имена. После начала состав маршрута не меняется.",
             )
             reviewers = [name.strip() for name in names.splitlines() if name.strip()]
         st.caption("Состав маршрута фиксируется при создании. Любой возврат завершает маршрут.")
-        if st.button("Начать согласование", key=f"{prefix}:start"):
+        if st.button("Начать согласование", key=f"{prefix}:start", type="primary",
+                     icon=":material/play_arrow:"):
             try:
                 create_approval(workspace, version_id, reviewers)
             except ValueError as error:
@@ -207,6 +224,7 @@ def render_approvals(workspace: dict, version_id: str) -> None:
         return
 
     route = workspace["approvals"][version_id]
+    st.caption(f"Решений получено: {len(route['decisions'])} из {len(route['reviewers'])}.")
     rows = []
     for name in route["reviewers"]:
         answer = route["decisions"].get(name, {})
@@ -221,23 +239,29 @@ def render_approvals(workspace: dict, version_id: str) -> None:
     st.table(rows)
 
     if status == "returned":
-        st.warning("Маршрут завершён возвратом. Ответственный создаёт новую ревизию после доработки.")
+        st.text("Маршрут завершён возвратом. Ответственный создаёт новую ревизию после доработки.")
     elif status == "approved":
-        st.success("Все участники согласовали указанную версию документов.")
+        st.text("Все участники согласовали указанную версию документов.")
+        st.caption("Откройте раздел «Ознакомление», чтобы предоставить документы назначенным сотрудникам.")
     else:
         pending = [name for name in route["reviewers"] if name not in route["decisions"]]
-        reviewer = st.selectbox(
-            "Действующий участник (симуляция)", pending, key=f"{prefix}:actor"
-        )
-        comment = st.text_area(
-            "Комментарий руководителя (обязателен для возврата)",
-            key=f"{prefix}:comment:{reviewer}",
-        )
-        approve, send_back = st.columns(2)
-        with approve:
-            approved = st.button("Согласовать версию", key=f"{prefix}:approve")
-        with send_back:
-            returned = st.button("Вернуть с комментарием", key=f"{prefix}:return")
+        with st.container(border=True):
+            st.subheader("Решение по версии", anchor=False)
+            reviewer = st.selectbox(
+                "Действующий участник (симуляция)", pending, key=f"{prefix}:actor",
+                help="В списке остаются только участники, которые ещё не приняли решение.",
+            )
+            comment = st.text_area(
+                "Комментарий руководителя (обязателен для возврата)",
+                key=f"{prefix}:comment:{reviewer}",
+                placeholder="Укажите, что нужно уточнить или доработать в этой версии.",
+            )
+            st.caption("Решение сохраняется для этой версии и не может быть изменено.")
+            with st.container(horizontal=True):
+                approved = st.button("Согласовать версию", key=f"{prefix}:approve",
+                                     type="primary", icon=":material/check:")
+                returned = st.button("Вернуть с комментарием", key=f"{prefix}:return",
+                                     icon=":material/undo:")
         if approved or returned:
             try:
                 record_decision(
