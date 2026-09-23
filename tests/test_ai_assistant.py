@@ -90,6 +90,19 @@ def test_chat_uses_verified_retrieved_citation(monkeypatch):
     assert answer["evidence"][0]["verified"] is True
 
 
+def test_chat_prefers_relevant_clauses_over_general_unit_mentions():
+    documents = {"before": [], "after": [{"name": "После/положение.txt", "text": (
+        "1.1. Отдел кабельных работ.\n"
+        "2.3.2. Выполняет монтажные кабельные работы.\n"
+        "2.3.3. Контролирует монтажные кабельные работы."
+    )}]}
+    selected = ai_assistant._chat_sources(
+        "Кто проверяет монтажные работы?", documents,
+        {"units": [], "function_map": [], "findings": []},
+    )
+    assert selected[0]["source"]["clause"] == "2.3.3"
+
+
 def test_no_key_chat_returns_local_sources_without_api(monkeypatch):
     documents = {"before": [], "after": [{"name": "После/положение.txt",
                                           "text": "1.1. Отдел бета проверяет завершённые работы."}]}

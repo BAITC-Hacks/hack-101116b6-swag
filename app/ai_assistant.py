@@ -191,7 +191,12 @@ def enrich_analysis(result, before, after, log=None):
 
 
 def _terms(value):
-    return {word[:5] for word in re.findall(r"[а-яёa-z0-9]{4,}", value.casefold().replace("ё", "е"))}
+    terms = {word[:5] for word in re.findall(r"[а-яёa-z0-9]{4,}", value.casefold().replace("ё", "е"))}
+    if "прове" in terms:
+        terms.add("контр")
+    if "контр" in terms:
+        terms.add("прове")
+    return terms
 
 
 def _chat_sources(question, documents, result, *, limit=10):
@@ -219,14 +224,15 @@ def _chat_sources(question, documents, result, *, limit=10):
                                    {"doc": fragment["doc"], "clause": fragment["clause"],
                                     "quote": fragment["text"], "verified": True}, 0))
     query = _terms(question)
-    ranked = sorted(
-        (row for row in candidates if query & _terms(row[0] + " " + row[1]["quote"])),
-        key=lambda row: (len(query & _terms(row[0] + " " + row[1]["quote"])) * 10 + row[2], row[2]),
-        reverse=True,
-    )
+    def rank(row):
+        quote_hits = len(query & _terms(row[1]["quote"]))
+        context_hits = len(query & _terms(row[0]))
+        return quote_hits * 20 + context_hits * 3 + row[2]
+
+    ranked = sorted((row for row in candidates if rank(row) > row[2]), key=rank, reverse=True)
     selected, seen = [], set()
     for context, source, _ in ranked:
-        key = (source["doc"], source["clause"], source["quote"])
+        key = (source["doc"], source["clause"])
         if key in seen:
             continue
         seen.add(key)
