@@ -183,7 +183,7 @@ def test_demo_filters_decisions_and_fresh_run_are_stateful(app_runtime):
     _start_demo(app)
     assert len(calls) == 1
     assert [tab.label for tab in app.tabs] == [
-        "Подразделения", "Сопоставление функций", "Находки", "Заключение", "Журнал агента"
+        "Подразделения", "Сопоставление функций", "Находки", "Заключение", "Журнал агента", "Структура и пункты"
     ]
     assert any("Выводы рекомендательные" in warning.value for warning in app.warning)
     run_id = app.session_state["run_id"]
@@ -311,7 +311,7 @@ def test_empty_results_missing_sources_and_unknown_statuses_render(app_module, m
     monkeypatch.setattr(app_module, "run_analysis", lambda *args, **kwargs: result)
     app = AppTest.from_function(_render_app, default_timeout=30).run()
     _start_demo(app)
-    assert len(app.tabs) == 5
+    assert len(app.tabs) == 6
     assert not app.exception
     if empty:
         assert {item.value for item in app.info} >= {

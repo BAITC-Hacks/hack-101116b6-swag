@@ -22,6 +22,7 @@ from app.workflow import DEMO_PEOPLE, impact_cards, make_version, new_workspace 
 from app.approvals import render_approvals  # noqa: E402
 from app.acknowledgements import render_acknowledgements, render_onboarding  # noqa: E402
 from app.ai_assistant import answer_question, enrich_analysis  # noqa: E402
+from app.source_explorer import render_sources  # noqa: E402
 
 SUPPORTED_SUFFIXES = {".pdf", ".docx", ".xlsx", ".txt"}
 WARNING = (
@@ -334,7 +335,7 @@ def render_findings(findings):
 
 
 def render_result(result):
-    tabs = st.tabs(["Подразделения", "Сопоставление функций", "Находки", "Заключение", "Журнал агента"])
+    tabs = st.tabs(["Подразделения", "Сопоставление функций", "Находки", "Заключение", "Журнал агента", "Структура и пункты"])
     with tabs[0]:
         render_units(result.get("units") or [])
     with tabs[1]:
@@ -370,6 +371,8 @@ def render_result(result):
                          column_config={"time": "Время", "step": "step", "status": "status", "message": "message"})
         else:
             st.info("Журнал пуст.")
+    with tabs[5]:
+        render_sources(st.session_state.get("source_documents"), st.session_state.get("run_id"))
 
 
 def render_impact(result):
