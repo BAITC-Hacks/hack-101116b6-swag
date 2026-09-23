@@ -19,7 +19,7 @@ from src.structure import extract_units
 PREFIX = re.compile(r"^\s*\d+(?:\.\d+)*\.\s*")
 ENTITY = r"(?:отдел|департамент|служба|центр|блок|управление|директор|руководитель|начальник|главный аудитор|работники)"
 ACTION = r"(?:выполня\w*|осуществля\w*|обеспечива\w*|организу\w*|контролиру\w*|проверя\w*|вед[её]т|хран\w*|разрабатыва\w*|утвержда\w*|согласовыва\w*|провод\w*|обслужива\w*|ремонтиру\w*)"
-DIRECT = re.compile(rf"^(?P<unit>{ENTITY}\b.+?)\s+(?P<action>{ACTION}\b.+)", re.I)
+DIRECT = re.compile(rf"^(?P<unit>{ENTITY}\b[^,.;:\n]*?)\s+(?P<action>{ACTION}\b[^\n]*)", re.I)
 RENAME = re.compile(
     rf"(?P<old>{ENTITY}\s+[^().:\n]+?)(?:\s*\([^)]*\))?\s+переименован[ао]?\s+в\s+(?P<new>{ENTITY}\s+[^().:\n]+)", re.I
 )

@@ -84,6 +84,32 @@ def test_block_and_department_function_headings_preserve_levels():
     ]
 
 
+def test_direct_role_stops_at_first_action_even_when_later_action_occurs():
+    text = (
+        "8.2. Главный аудитор разрабатывает План работ, используя риск-ориентированный подход. "
+        "Все работы подразделяются на выполняемые проекты и постоянные задачи.\n"
+        "9.41. Главный аудитор разрабатывает правила хранения документов.\n"
+        "9.42. Главный аудитор осуществляет контроль за доступом к документам. "
+        "Передача документов осуществляется по правилам."
+    )
+    functions = extract_functions(split_clauses(text, "probe.txt"))
+    assert len(functions) == 3
+    assert {f["unit"] for f in functions} == {"Главный аудитор"}
+    assert {f["level"] for f in functions} == {"role"}
+
+
+def test_same_role_is_not_reported_created_or_removed_due_to_later_verb(tmp_path):
+    before = (
+        "8.2. Главный аудитор разрабатывает План работ, используя риск-ориентированный подход. "
+        "Все работы подразделяются на выполняемые проекты и постоянные задачи."
+    )
+    after = before.replace("подход.", "подход,")
+    result, paths = analyze(tmp_path, before, after)
+    assert {u["name"] for u in result["units"]} == {"Главный аудитор"}
+    assert {u["status"] for u in result["units"]} == {"kept"}
+    assert_sources(result, paths)
+
+
 def test_block_function_does_not_match_department_function(tmp_path):
     before = "1.1. Функции блока проверки:\n1.1.1. Проверяет качество завершённых кабельных работ."
     after = "1.1. Функции отдела проверки:\n1.1.1. Проверяет качество завершённых кабельных работ."
