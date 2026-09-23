@@ -9,8 +9,8 @@ import streamlit as st
 
 PAGES = {
     "Мои сравнения": {
-        "title": "От документов —<br>к ясной структуре.",
-        "description": "Сравнивайте редакции, проверяйте изменения и согласуйте решения. Документы, вопросы и история каждого анализа — рядом.",
+        "title": "Изменения видны.<br><em>Ответственность ясна.</em>",
+        "description": "Что изменилось, кто отвечает и какие функции могли потеряться? Сравните редакции и проверьте ответы по источникам.",
         "action": "К моим сравнениям", "art": "analysis",
         "steps": [("Сравните", "Добавьте редакции до и после"),
                   ("Проверьте", "Изучите находки и задайте вопросы"),
@@ -25,7 +25,7 @@ PAGES = {
                   ("Отметьте прочитанное", "Или задайте уточняющий вопрос")],
     },
     "Анализ изменений": {
-        "title": "От документов —<br>к ясной структуре.",
+        "title": "Изменения видны.<br><em>Ответственность ясна.</em>",
         "description": "Сравните редакции, найдите изменения в функциях и проверьте каждый вывод по источнику.",
         "action": "Начать сравнение", "art": "analysis",
         "steps": [("Сравните", "Загрузите документы до и после"),
@@ -87,15 +87,15 @@ def render_brand():
 def _art(kind):
     """Concept illustrations, not fabricated findings or actionable controls."""
     if kind == "analysis":
-        return '''<div class="art-overline">СВЯЗЬ МЕЖДУ РЕДАКЦИЯМИ</div>
-        <div class="document-pair"><div class="paper paper-before"><span>До изменений</span>
-        <div class="paper-line long"></div><div class="paper-line"></div><div class="clause old"></div>
-        <div class="paper-line"></div><div class="paper-line short"></div><i>Предыдущая редакция</i></div>
-        <div class="paper paper-after"><span>После изменений</span>
-        <div class="paper-line long"></div><div class="paper-line"></div><div class="clause new"></div>
-        <div class="paper-line"></div><div class="paper-line short"></div><i>Новая редакция</i></div>
-        <div class="document-link">↔</div></div>
-        <div class="art-note"><span class="note-mark">§</span> За каждым выводом — источник</div>'''
+        return '''<div class="map-toolbar"><span><i></i> Карта изменений</span><span>ДО → ПОСЛЕ</span></div>
+        <div class="revision-map">
+          <div class="revision-source"><span class="map-icon">§</span><div><b>Две редакции</b><small>Документы до и после</small></div><span class="file-stack">≡</span></div>
+          <div class="map-stem"></div>
+          <div class="map-engine"><span>↔</span><div><b>Сопоставление функций</b><small>Структура · обязанности · связи</small></div></div>
+          <div class="map-branches"><span></span><span></span><span></span></div>
+          <div class="map-nodes"><div><span>↗</span><b>Изменения</b></div><div><span>◎</span><b>Пересечения</b></div><div><span>?</span><b>Потери</b></div></div>
+          <div class="map-evidence"><span>↳</span> Документ <i>→</i> Пункт <i>→</i> Цитата <b>§</b></div>
+        </div><div class="map-caption">Схема анализа · каждый вывод можно проверить</div>'''
     if kind == "chat":
         return '''<div class="art-overline">ДИАЛОГ С ОПОРОЙ НА ИСТОЧНИК</div>
         <div class="conversation"><div class="question-note">Что изменилось в обязанностях?</div>
@@ -127,9 +127,9 @@ def _art(kind):
 def render_hero(page, *, compact=False):
     content = PAGES[page]
     size = " compact" if compact else ""
-    title = content["title"].replace("<br>", " ") if compact else content["title"]
+    title = content["title"].replace("<br>", " ").replace("<em>", "").replace("</em>", "") if compact else content["title"]
     st.html(f'''<section class="org-hero{size}" aria-labelledby="page-heading">
-      <div class="hero-copy"><p class="hero-section">{escape(page)}</p>
+      <div class="hero-copy"><p class="hero-section"><span class="section-spark" aria-hidden="true">✳</span> {escape(page)}</p>
       <h1 id="page-heading">{title}</h1><p class="hero-description">{content['description']}</p>
       <a class="hero-action" href="#workspace" target="_self">{content['action']} <span aria-hidden="true">↓</span></a></div>
       <div class="hero-art art-{content['art']}" aria-hidden="true">{_art(content['art'])}</div>
