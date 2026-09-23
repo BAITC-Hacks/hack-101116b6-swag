@@ -1,0 +1,15 @@
+cat >> .git/info/exclude <<'EOF'
+AGENTS.md
+CLAUDE.md
+.claude/
+.agents/
+.codex/
+.cursor/
+skills/
+.mcp.json
+.env
+.venv/
+__pycache__/
+.DS_Store
+*.sh
+EOF
