@@ -7,7 +7,13 @@
 Сравните документы до и после реорганизации.<br>
 Найдите изменения ответственности и риски — с пунктами и цитатами из источников.
 
-[![LIVE DEMO](https://img.shields.io/badge/LIVE_DEMO-afm.codes-22c55e?style=for-the-badge&logo=googlechrome&logoColor=white)](https://www.afm.codes)
+<h2><a href="https://www.afm.codes">🚀 Открыть LIVE DEMO</a></h2>
+
+<a href="https://www.afm.codes">
+  <img src="https://img.shields.io/badge/LIVE_DEMO-afm.codes-22c55e?style=for-the-badge&amp;logo=googlechrome&amp;logoColor=white" alt="LIVE DEMO — afm.codes" width="420">
+</a>
+
+<br><br>
 
 [![Python](https://img.shields.io/badge/Python-3.11-3776AB?style=for-the-badge&logo=python&logoColor=white)](Dockerfile)
 [![Streamlit](https://img.shields.io/badge/Streamlit-1.64%2B-FF4B4B?style=for-the-badge&logo=streamlit&logoColor=white)](requirements.txt)
